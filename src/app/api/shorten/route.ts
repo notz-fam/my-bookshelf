@@ -5,11 +5,10 @@ import { NextRequest, NextResponse } from "next/server";
 // provider fallback. Restricted to our own origin so it can't be abused
 // as an open URL shortener.
 
-async function shortenTinyUrl(url: string): Promise<string | null> {
+// da.gd: clean 302 redirect straight to the target, no affiliate interstitial
+async function shortenDaGd(url: string): Promise<string | null> {
   try {
-    const res = await fetch(
-      `https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`
-    );
+    const res = await fetch(`https://da.gd/s?url=${encodeURIComponent(url)}`);
     if (!res.ok) return null;
     const text = (await res.text()).trim();
     return text.startsWith("http") ? text : null;
@@ -18,10 +17,11 @@ async function shortenTinyUrl(url: string): Promise<string | null> {
   }
 }
 
-async function shortenIsGd(url: string): Promise<string | null> {
+// TinyURL: reliable fallback (may route through an affiliate redirect)
+async function shortenTinyUrl(url: string): Promise<string | null> {
   try {
     const res = await fetch(
-      `https://is.gd/create.php?format=simple&url=${encodeURIComponent(url)}`
+      `https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`
     );
     if (!res.ok) return null;
     const text = (await res.text()).trim();
@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "URL host not allowed" }, { status: 400 });
   }
 
-  const shortUrl = (await shortenTinyUrl(url)) ?? (await shortenIsGd(url));
+  const shortUrl = (await shortenDaGd(url)) ?? (await shortenTinyUrl(url));
   if (!shortUrl) {
     return NextResponse.json({ error: "Failed to shorten URL" }, { status: 502 });
   }
