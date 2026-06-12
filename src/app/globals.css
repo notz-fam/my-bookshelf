@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * デザインテーマ: 生成り紙 × テラコッタ × ベージュ × ブラウン
+ * フラットな図形＋細いインク線＋ずらし影（紙を重ねた風）のコラージュ調
+ */
+:root {
+  --paper: #faf6ef; /* 背景の生成り */
+  --ink: #3e3831; /* 細線・テキスト */
+  --ink-muted: #8c8276; /* 補助テキスト */
+  --terracotta: #dfa37e; /* 主アクセント */
+  --terracotta-deep: #c9805b;
+  --beige: #e6dcc8;
+  --tan: #d9c3a3; /* 本棚フレーム */
+  --brown: #8a7264; /* ずらし影 */
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+}
