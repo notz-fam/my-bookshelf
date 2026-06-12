@@ -1,21 +1,42 @@
+import {
+  compressToEncodedURIComponent,
+  decompressFromEncodedURIComponent,
+} from "lz-string";
 import type { BookshelfData } from "@/features/bookshelf/types";
 
 export function encodeBookshelfData(data: BookshelfData): string {
   try {
     const json = JSON.stringify(data);
-    // encodeURIComponent handles Unicode, btoa handles base64
-    return btoa(encodeURIComponent(json));
+    // lz-string compresses the JSON and emits URL-safe characters directly.
+    // For Japanese text this is far shorter than encodeURIComponent + btoa,
+    // which inflated every kanji to ~12 chars.
+    return compressToEncodedURIComponent(json);
   } catch {
     return "";
   }
 }
 
-export function decodeBookshelfData(encoded: string): BookshelfData | null {
+function parseBookshelfJson(json: string): BookshelfData | null {
   try {
-    const json = decodeURIComponent(atob(encoded));
     const parsed = JSON.parse(json) as BookshelfData;
     if (!parsed.name || !Array.isArray(parsed.books)) return null;
     return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function decodeBookshelfData(encoded: string): BookshelfData | null {
+  // New format: lz-string compressed
+  const decompressed = decompressFromEncodedURIComponent(encoded);
+  if (decompressed) {
+    const data = parseBookshelfJson(decompressed);
+    if (data) return data;
+  }
+
+  // Legacy format: btoa(encodeURIComponent(json)) — keep old share links working
+  try {
+    return parseBookshelfJson(decodeURIComponent(atob(encoded)));
   } catch {
     return null;
   }
