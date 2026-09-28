@@ -4,7 +4,7 @@
 - コンポーネント：PascalCase（UserProfile.tsx）
 - 関数・変数：camelCase
 - 定数：UPPER_SNAKE_CASE
-- CSSクラス：Tailwindのみ使用（カスタムCSS原則禁止）
+- CSSクラス：Tailwindを基本とする。カスタムCSSも可（テーマのCSS変数やTailwindで表現しづらいスタイルは `src/app/globals.css` に書く）
 
 ### ファイル構成
 src/

@@ -1,32 +1,25 @@
 "use client";
 
 import Image from "next/image";
+import { AnimatePresence, motion } from "motion/react";
+import { BookCheck, BookDashed, BookOpen, PanelTop, Pencil, X } from "lucide-react";
 import type { Book, DisplayStyle } from "../types";
+import { Button } from "@/shared/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/shared/ui/tooltip";
 
-// テーマパレット: 生成り紙×テラコッタ×ベージュ×ブラウンのくすんだフラットカラー
-const SPINE_COLORS = [
-  "#D99A72", // テラコッタ
-  "#C9805B", // 深いテラコッタ
-  "#B96F4E", // 焦がしテラコッタ
-  "#E3D5B8", // クリーム
-  "#D6C29D", // ベージュ
-  "#C8A87C", // タン
-  "#CFCBC0", // 明るいグレー
-  "#B8B4A7", // 暖かいグレー
-  "#9C8E7D", // グレージュ
-  "#8A7264", // ブラウン
-  "#75604F", // 深いブラウン
-  "#A9A488", // セージ
-  "#8F8C72", // 深いセージ
-];
-
-const INK = "#3E3831";
-const ACCENT_DRAG = "#C9805B";
+// 背表紙の色は globals.css の --spine-1..N（light/dark で別パレット）
+const SPINE_COLOR_COUNT = 12;
 
 const SPINE_WIDTHS = [34, 40, 46, 52];
 const SPINE_HEIGHTS = [152, 165, 178, 191, 204];
 export const FACE_OUT_WIDTH = 112;
 const FACE_OUT_HEIGHT = 158;
+
+const HOVER_SPRING = { type: "spring", stiffness: 420, damping: 24 } as const;
 
 // 本のIDから決定的に見た目（色・サイズ・装飾）を決めるためのハッシュ
 function hash(id: number, salt: number): number {
@@ -50,15 +43,14 @@ function getSpineHeight(book: Book): number {
   return SPINE_HEIGHTS[hash(book.id, 2) % SPINE_HEIGHTS.length];
 }
 
-function getColor(book: Book): string {
-  return SPINE_COLORS[hash(book.id, 3) % SPINE_COLORS.length];
-}
-
-function isLightColor(hex: string): boolean {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return 0.299 * r + 0.587 * g + 0.114 * b > 160;
+function getSpineColors(book: Book) {
+  const n = (hash(book.id, 3) % SPINE_COLOR_COUNT) + 1;
+  const fg = `var(--spine-${n}-fg)`;
+  return {
+    bg: `var(--spine-${n})`,
+    fg,
+    accent: `color-mix(in oklch, ${fg} 40%, transparent)`,
+  };
 }
 
 type Decoration = "bands" | "label" | "dots" | "lines" | "plain";
@@ -101,7 +93,7 @@ function SpineDecoration({
         {[0, 1, 2].map((i) => (
           <span
             key={i}
-            className="inline-block w-1 h-1 rotate-45"
+            className="inline-block size-1 rounded-full"
             style={{ background: accent }}
           />
         ))}
@@ -113,13 +105,47 @@ function SpineDecoration({
     return (
       <div className="flex justify-center">
         <div
-          className="w-4 h-5 rounded-[2px] border"
-          style={{ borderColor: accent, background: "rgba(0,0,0,0.12)" }}
+          className="w-4 h-5 rounded-[3px] border bg-black/15"
+          style={{ borderColor: accent }}
         />
       </div>
     );
   }
   return <div className="h-0.5 w-full" style={{ background: accent }} />;
+}
+
+function ControlButton({
+  label,
+  destructive,
+  onClick,
+  children,
+}: {
+  label: string;
+  destructive?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant={destructive ? "destructive" : "secondary"}
+          size="icon-sm"
+          className="size-6 rounded-full shadow-md [&_svg:not([class*='size-'])]:size-3"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClick();
+          }}
+          aria-label={label}
+        >
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={4}>
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 interface BookItemProps {
@@ -130,6 +156,8 @@ interface BookItemProps {
   isNew?: boolean;
   onRemove?: (id: number) => void;
   onToggleDisplay?: (id: number, display: DisplayStyle) => void;
+  onToggleFinish?: (id: number, finish: boolean) => void;
+  onEdit?: (book: Book) => void;
   onDragStartItem?: (index: number) => void;
   onDragOverItem?: (index: number) => void;
   onDropItem?: (index: number) => void;
@@ -145,6 +173,8 @@ export default function BookItem({
   isNew,
   onRemove,
   onToggleDisplay,
+  onToggleFinish,
+  onEdit,
   onDragStartItem,
   onDragOverItem,
   onDropItem,
@@ -153,13 +183,9 @@ export default function BookItem({
   isDragOver,
 }: BookItemProps) {
   const display = getBookDisplay(book);
-  const color = getColor(book);
-  const lightText = !isLightColor(color);
-  const textColor = lightText ? "#F7F1E6" : "#4A4339";
-  const accent = lightText
-    ? "rgba(255, 255, 255, 0.5)"
-    : "rgba(62, 56, 49, 0.35)";
+  const { bg, fg, accent } = getSpineColors(book);
   const decoration = getDecoration(book);
+  const width = getBookWidth(book);
 
   const handleClick = () => {
     if (book.amazonUrl) {
@@ -169,55 +195,63 @@ export default function BookItem({
 
   const newBadge = isNew && (
     <span
-      className="absolute -top-2 -left-1.5 z-10 px-1 py-0.5 rounded-sm text-[9px] font-bold leading-none select-none"
-      style={{
-        background: INK,
-        color: "#F7F1E6",
-        boxShadow: "2px 2px 0 rgba(138, 114, 100, 0.6)",
-      }}
+      className="absolute -top-2.5 -left-2 z-10 flex items-center gap-1 rounded-full bg-primary px-1.5 py-0.5 text-[9px] font-bold leading-none text-primary-foreground shadow-md select-none"
       title="このセッションで追加した本"
     >
+      <span className="relative flex size-1.5">
+        <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary-foreground opacity-75" />
+        <span className="relative inline-flex size-1.5 rounded-full bg-primary-foreground" />
+      </span>
       NEW
     </span>
   );
 
+  // 未読（積読）の本。閲覧者にも見えるようにバッジを付ける
+  const unreadBadge = !book.finish && (
+    <span
+      className="absolute -bottom-1.5 -left-2 z-10 flex size-5 items-center justify-center rounded-full border bg-muted text-muted-foreground shadow-md select-none"
+      title="積読（まだ読んでいない本）"
+      role="img"
+      aria-label="積読"
+    >
+      <BookDashed className="size-3" />
+    </span>
+  );
+
   const controls = isOwner && (
-    <div className="absolute -top-2 -right-1 z-10 hidden group-hover:flex gap-1">
+    <div className="absolute -top-3 -right-2 z-10 flex gap-1 opacity-0 scale-75 pointer-events-none transition-all duration-200 group-hover:opacity-100 group-hover:scale-100 group-hover:pointer-events-auto">
+      {onEdit && (
+        <ControlButton label="編集" onClick={() => onEdit(book)}>
+          <Pencil />
+        </ControlButton>
+      )}
+      {onToggleFinish && (
+        <ControlButton
+          label={book.finish ? "積読にする" : "読了にする"}
+          onClick={() => onToggleFinish(book.id, !book.finish)}
+        >
+          {book.finish ? <BookDashed /> : <BookCheck />}
+        </ControlButton>
+      )}
       {onToggleDisplay && (
-        <button
-          className="w-5 h-5 bg-black/70 hover:bg-black text-white rounded-full text-[10px] flex items-center justify-center shadow-md leading-none"
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleDisplay(
-              book.id,
-              display === "normal" ? "face-out" : "normal"
-            );
-          }}
-          title={display === "normal" ? "面出しにする" : "背表紙にする"}
-          aria-label={
-            display === "normal"
-              ? `${book.name}を面出しにする`
-              : `${book.name}を背表紙にする`
+        <ControlButton
+          label={display === "normal" ? "面出しにする" : "背表紙にする"}
+          onClick={() =>
+            onToggleDisplay(book.id, display === "normal" ? "face-out" : "normal")
           }
         >
-          {display === "normal" ? "面" : "背"}
-        </button>
+          {display === "normal" ? <PanelTop /> : <BookOpen />}
+        </ControlButton>
       )}
       {onRemove && (
-        <button
-          className="w-5 h-5 bg-red-500 hover:bg-red-600 text-white rounded-full text-xs flex items-center justify-center shadow-md leading-none"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove(book.id);
-          }}
-          aria-label={`${book.name}を削除`}
-        >
-          ×
-        </button>
+        <ControlButton label="削除" destructive onClick={() => onRemove(book.id)}>
+          <X />
+        </ControlButton>
       )}
     </div>
   );
 
+  // ネイティブDnDは素の div に付ける（motion.div は onDrag* を独自ジェスチャーで上書きするため）
   const dragProps = isOwner
     ? {
         draggable: true,
@@ -239,114 +273,111 @@ export default function BookItem({
       }
     : {};
 
-  const wrapperStyle: React.CSSProperties = {
-    opacity: isDragging ? 0.4 : 1,
-    boxShadow: isDragOver ? `-3px 0 0 0 ${ACCENT_DRAG}` : undefined,
-  };
-
-  if (display === "face-out") {
-    return (
+  const face =
+    display === "face-out" ? (
       <div
-        className={`relative flex-shrink-0 group select-none ${
-          isOwner ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
-        }`}
-        style={{ width: `${FACE_OUT_WIDTH}px`, ...wrapperStyle }}
-        onClick={handleClick}
-        title={book.name + (book.author ? ` / ${book.author}` : "") + (book.amazonUrl ? " (クリックでAmazonへ)" : "")}
-        {...dragProps}
+        className="relative w-full rounded-[4px] overflow-hidden shadow-[0_10px_24px_-10px_rgb(0_0_0/0.45)] ring-1 ring-black/10 dark:ring-white/10"
+        style={{ height: `${FACE_OUT_HEIGHT}px` }}
       >
-        <div
-          className="relative w-full rounded-[3px] overflow-hidden transition-transform duration-200 group-hover:-translate-y-2"
-          style={{
-            height: `${FACE_OUT_HEIGHT}px`,
-            boxShadow: "3px 3px 0 rgba(62, 56, 49, 0.25)",
-          }}
-        >
-          {book.coverUrl ? (
-            <Image
-              src={book.coverUrl}
-              alt={book.name}
-              fill
-              className="object-cover"
-              unoptimized
-            />
-          ) : (
+        {book.coverUrl ? (
+          <Image src={book.coverUrl} alt={book.name} fill className="object-cover" unoptimized />
+        ) : (
+          <div
+            className="w-full h-full flex flex-col items-center justify-center p-2"
+            style={{ background: bg }}
+          >
             <div
-              className="w-full h-full flex flex-col items-center justify-center p-2"
-              style={{ background: color }}
+              className="absolute inset-1.5 rounded-[2px] border pointer-events-none"
+              style={{ borderColor: accent }}
+            />
+            <span
+              className="font-bold text-xs text-center leading-tight line-clamp-5"
+              style={{ color: fg }}
             >
-              <div
-                className="absolute inset-1.5 rounded-[2px] border pointer-events-none"
-                style={{ borderColor: accent }}
-              />
-              <span
-                className="font-bold text-xs text-center leading-tight"
-                style={{
-                  color: textColor,
-                  display: "-webkit-box",
-                  WebkitLineClamp: 5,
-                  WebkitBoxOrient: "vertical",
-                  overflow: "hidden",
-                }}
-              >
-                {book.name}
-              </span>
-            </div>
-          )}
-        </div>
-        {newBadge}
-        {controls}
+              {book.name}
+            </span>
+          </div>
+        )}
+        {/* 光沢 */}
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-tr from-transparent via-white/0 to-white/15" />
       </div>
-    );
-  }
-
-  // 背表紙（normal）
-  const width = getBookWidth(book);
-  const height = getSpineHeight(book);
-
-  return (
-    <div
-      className={`relative flex-shrink-0 group select-none ${
-        isOwner ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
-      }`}
-      style={{ width: `${width}px`, ...wrapperStyle }}
-      onClick={handleClick}
-      title={book.name + (book.author ? ` / ${book.author}` : "") + (book.amazonUrl ? " (クリックでAmazonへ)" : "")}
-      {...dragProps}
-    >
+    ) : (
       <div
-        className="rounded-t-[3px] transition-transform duration-200 group-hover:-translate-y-2 flex flex-col justify-between pt-2.5 pb-2 px-1"
-        style={{
-          height: `${height}px`,
-          background: color,
-          // 左端の影で背の丸みをフラットに表現
-          boxShadow: "inset 3px 0 0 rgba(62, 56, 49, 0.15)",
-        }}
+        className="rounded-t-[4px] flex flex-col justify-between pt-2.5 pb-2 px-1 shadow-[inset_3px_0_0_rgb(0_0_0/0.18),inset_-1px_0_0_rgb(255_255_255/0.08)]"
+        style={{ height: `${getSpineHeight(book)}px`, background: bg }}
       >
         <SpineDecoration decoration={decoration} accent={accent} position="top" />
         <div className="flex-1 flex items-center justify-center overflow-hidden min-h-0">
           <span
-            className="font-semibold text-[11px] leading-tight text-center"
+            className="font-semibold text-[11px] leading-tight text-center break-all"
             style={{
-              color: textColor,
+              color: fg,
               writingMode: "vertical-rl",
               textOrientation: "mixed",
               overflow: "hidden",
-              maxHeight: `${height - 60}px`,
-              wordBreak: "break-all",
+              maxHeight: `${getSpineHeight(book) - 60}px`,
             }}
           >
             {book.name}
           </span>
         </div>
-        <SpineDecoration
-          decoration={decoration}
-          accent={accent}
-          position="bottom"
-        />
+        <SpineDecoration decoration={decoration} accent={accent} position="bottom" />
       </div>
-      {newBadge}
-      {controls}
+    );
+
+  return (
+    <div
+      className={`relative flex-shrink-0 group select-none transition-opacity [perspective:600px] ${
+        isOwner ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
+      } ${isDragging ? "opacity-40" : "opacity-100"}`}
+      style={{ width: `${width}px` }}
+      onClick={handleClick}
+      title={
+        book.name +
+        (book.author ? ` / ${book.author}` : "") +
+        (book.finish ? "" : "（積読）") +
+        (book.amazonUrl ? " (クリックでAmazonへ)" : "")
+      }
+      {...dragProps}
+    >
+      {/* ドロップ先インジケータ */}
+      <AnimatePresence>
+        {isDragOver && (
+          <motion.span
+            className="absolute -left-[5px] bottom-0 z-10 w-[3px] h-full rounded-full bg-drop-indicator"
+            initial={{ scaleY: 0, opacity: 0 }}
+            animate={{ scaleY: 1, opacity: 1 }}
+            exit={{ scaleY: 0, opacity: 0 }}
+            style={{ originY: 1 }}
+            transition={{ type: "spring", stiffness: 500, damping: 30 }}
+          />
+        )}
+      </AnimatePresence>
+
+      <motion.div
+        whileHover={
+          display === "face-out" ? { y: -8, rotateY: -12 } : { y: -8 }
+        }
+        transition={HOVER_SPRING}
+        style={{ transformStyle: "preserve-3d" }}
+      >
+        {/* 背表紙 ⇄ 面出しの切替を本をめくるように回転 */}
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={display}
+            initial={{ rotateY: 90, opacity: 0 }}
+            animate={{ rotateY: 0, opacity: 1 }}
+            exit={{ rotateY: -90, opacity: 0 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            className={book.finish ? undefined : "saturate-50 opacity-80"}
+          >
+            {face}
+          </motion.div>
+        </AnimatePresence>
+        {newBadge}
+        {unreadBadge}
+        {controls}
+      </motion.div>
     </div>
   );
 }

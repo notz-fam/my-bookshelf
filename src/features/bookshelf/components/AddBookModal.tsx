@@ -2,7 +2,16 @@
 
 import { useState, useRef } from "react";
 import Image from "next/image";
+import { AnimatePresence, motion } from "motion/react";
+import { AlertCircle, Check, CircleDashed, Sparkles, X } from "lucide-react";
 import Modal from "@/shared/components/Modal";
+import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
+import { Label } from "@/shared/ui/label";
+import { Switch } from "@/shared/ui/switch";
+import { Textarea } from "@/shared/ui/textarea";
+import { Spinner } from "@/shared/ui/spinner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { extractAsinFromUrl, getAmazonCoverUrl } from "@/lib/url";
 import type { Book } from "../types";
 import type { BookLookupResult } from "@/lib/book-lookup";
@@ -11,6 +20,9 @@ interface AddBookModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAdd: (book: Omit<Book, "id">) => void;
+  /** 指定すると編集モード（1冊フォームのみ・既存値を初期表示） */
+  editingBook?: Book | null;
+  onUpdate?: (id: number, updates: Omit<Book, "id">) => void;
 }
 
 type LookupStatus = "idle" | "loading" | "found" | "not_found" | "error";
@@ -36,10 +48,35 @@ interface BulkLine {
 // How many lookups to run at once (Amazon scraping is slow; stay polite)
 const BULK_CONCURRENCY = 4;
 
-export default function AddBookModal({ isOpen, onClose, onAdd }: AddBookModalProps) {
+export default function AddBookModal({
+  isOpen,
+  onClose,
+  onAdd,
+  editingBook,
+  onUpdate,
+}: AddBookModalProps) {
   const [mode, setMode] = useState<Mode>("single");
   const [form, setForm] = useState(EMPTY_FORM);
   const [previewCover, setPreviewCover] = useState<string | null>(null);
+
+  // 編集対象が切り替わったらフォームに既存値を流し込む
+  const [prevEditingBook, setPrevEditingBook] = useState<Book | null>(null);
+  if ((editingBook ?? null) !== prevEditingBook) {
+    setPrevEditingBook(editingBook ?? null);
+    if (editingBook) {
+      setMode("single");
+      setForm({
+        name: editingBook.name,
+        author: editingBook.author ?? "",
+        category: editingBook.category ?? "",
+        amazonUrl: editingBook.amazonUrl ?? "",
+        coverUrl: editingBook.coverUrl ?? "",
+        finish: editingBook.finish,
+      });
+      setPreviewCover(editingBook.coverUrl ?? null);
+    }
+  }
+  const isEditing = !!editingBook;
   const [lookupStatus, setLookupStatus] = useState<LookupStatus>("idle");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Tracks whether each field was auto-filled (so we can overwrite on re-lookup)
@@ -119,14 +156,20 @@ export default function AddBookModal({ isOpen, onClose, onAdd }: AddBookModalPro
     const name = form.name.trim();
     if (!name) return;
 
-    onAdd({
+    const book = {
       name,
       author: form.author.trim() || null,
       category: form.category.trim() || null,
       amazonUrl: form.amazonUrl.trim() || undefined,
       coverUrl: form.coverUrl.trim() || undefined,
       finish: form.finish,
-    });
+    };
+    if (editingBook) {
+      // display など、フォームに無い項目は保持する
+      onUpdate?.(editingBook.id, { ...book, display: editingBook.display });
+    } else {
+      onAdd(book);
+    }
 
     resetAndClose();
   };
@@ -214,310 +257,329 @@ export default function AddBookModal({ isOpen, onClose, onAdd }: AddBookModalPro
   const lookupIndicator = () => {
     if (lookupStatus === "loading")
       return (
-        <span className="flex items-center gap-1 text-[#C9805B]">
-          <span className="inline-block w-3 h-3 border-2 border-[#C9805B] border-t-transparent rounded-full animate-spin" />
+        <span className="flex items-center gap-1.5 text-muted-foreground">
+          <Spinner className="size-3" />
           書籍情報を取得中…
         </span>
       );
     if (lookupStatus === "found")
-      return <span className="text-green-600">✓ 書籍情報を自動入力しました</span>;
+      return (
+        <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+          <Sparkles className="size-3" />
+          書籍情報を自動入力しました
+        </span>
+      );
     if (lookupStatus === "not_found")
-      return <span className="text-gray-400">書籍情報が見つかりませんでした。タイトルは手動で入力してください</span>;
+      return (
+        <span className="text-muted-foreground">
+          書籍情報が見つかりませんでした。タイトルは手動で入力してください
+        </span>
+      );
     if (lookupStatus === "error")
-      return <span className="text-red-400">取得中にエラーが発生しました</span>;
+      return (
+        <span className="flex items-center gap-1.5 text-destructive">
+          <AlertCircle className="size-3" />
+          取得中にエラーが発生しました
+        </span>
+      );
     return null;
   };
 
+  const bulkStatusIcon = (status: BulkLineStatus) => {
+    switch (status) {
+      case "pending":
+        return <CircleDashed className="size-3.5 text-muted-foreground/50" />;
+      case "loading":
+        return <Spinner className="size-3.5 text-muted-foreground" />;
+      case "added":
+        return <Check className="size-3.5 text-emerald-600 dark:text-emerald-400" />;
+      case "title_only":
+        return <Check className="size-3.5 text-muted-foreground" />;
+      case "failed":
+        return <X className="size-3.5 text-destructive" />;
+    }
+  };
+
   return (
-    <Modal isOpen={isOpen} onClose={resetAndClose} title="本を追加する">
-      {/* Mode tabs */}
-      <div className="flex gap-2 mb-4">
-        {([
-          ["single", "1冊ずつ"],
-          ["bulk", "まとめて追加"],
-        ] as const).map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => setMode(value)}
-            className="flex-1 py-2 rounded-md border text-sm font-semibold transition-colors"
-            style={
-              mode === value
-                ? { background: "#DFA37E", borderColor: "#3E3831", color: "#3E3831" }
-                : { background: "#FAF6EF", borderColor: "#3E383159", color: "#8C8276" }
-            }
+    <Modal isOpen={isOpen} onClose={resetAndClose} title={isEditing ? "本を編集する" : "本を追加する"}>
+      <Tabs value={mode} onValueChange={(v) => setMode(v as Mode)} className="gap-4">
+        <TabsList className={isEditing ? "hidden" : "w-full"}>
+          <TabsTrigger value="single">1冊ずつ</TabsTrigger>
+          <TabsTrigger value="bulk">まとめて追加</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="single">
+          <motion.form
+            onSubmit={handleSubmit}
+            className="space-y-4"
+            initial={{ opacity: 0, x: -12 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.2 }}
           >
-            {label}
-          </button>
-        ))}
-      </div>
+            {/* Amazon URL */}
+            <div className="space-y-1.5">
+              <Label htmlFor="add-amazon-url">
+                Amazon URL
+                <span className="text-xs font-normal text-muted-foreground">
+                  （タイトル・カテゴリ・表紙を自動取得）
+                </span>
+              </Label>
+              <Input
+                id="add-amazon-url"
+                type="url"
+                value={form.amazonUrl}
+                onChange={(e) => handleAmazonUrlChange(e.target.value)}
+                placeholder="https://www.amazon.co.jp/dp/..."
+              />
+              <AnimatePresence mode="wait" initial={false}>
+                {lookupStatus !== "idle" && (
+                  <motion.p
+                    key={lookupStatus}
+                    className="text-xs"
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 4 }}
+                    transition={{ duration: 0.15 }}
+                  >
+                    {lookupIndicator()}
+                  </motion.p>
+                )}
+              </AnimatePresence>
+            </div>
 
-      {mode === "single" ? (
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Amazon URL */}
-        <div>
-          <label className="block text-sm font-semibold text-[#3E3831] mb-1">
-            Amazon URL
-            <span className="ml-1 text-xs font-normal text-gray-400">
-              （タイトル・カテゴリ・表紙を自動取得）
-            </span>
-          </label>
-          <input
-            type="url"
-            value={form.amazonUrl}
-            onChange={(e) => handleAmazonUrlChange(e.target.value)}
-            placeholder="https://www.amazon.co.jp/dp/..."
-            className="w-full border border-[#3E383159] bg-white text-[#3E3831] rounded-md px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#DFA37E] focus:border-transparent transition"
-          />
-          {lookupStatus !== "idle" && (
-            <p className="mt-1 text-xs">{lookupIndicator()}</p>
-          )}
-        </div>
-
-        {/* Book name */}
-        <div>
-          <label className="block text-sm font-semibold text-[#3E3831] mb-1">
-            タイトル <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="text"
-            value={form.name}
-            onChange={(e) => {
-              autoFilledRef.current.name = false;
-              setForm((f) => ({ ...f, name: e.target.value }));
-            }}
-            placeholder="本のタイトルを入力"
-            required
-            maxLength={100}
-            className="w-full border border-[#3E383159] bg-white text-[#3E3831] rounded-md px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#DFA37E] focus:border-transparent transition"
-          />
-        </div>
-
-        {/* Author */}
-        <div>
-          <label className="block text-sm font-semibold text-[#3E3831] mb-1">
-            作者
-            <span className="ml-1 text-xs font-normal text-gray-400">
-              （オプション）
-            </span>
-          </label>
-          <input
-            type="text"
-            value={form.author}
-            onChange={(e) => {
-              autoFilledRef.current.author = false;
-              setForm((f) => ({ ...f, author: e.target.value }));
-            }}
-            placeholder="例：村上春樹"
-            maxLength={50}
-            className="w-full border border-[#3E383159] bg-white text-[#3E3831] rounded-md px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#DFA37E] focus:border-transparent transition"
-          />
-        </div>
-
-        {/* Category */}
-        <div>
-          <label className="block text-sm font-semibold text-[#3E3831] mb-1">
-            カテゴリ
-            <span className="ml-1 text-xs font-normal text-gray-400">
-              （オプション）
-            </span>
-          </label>
-          <input
-            type="text"
-            value={form.category}
-            onChange={(e) => {
-              autoFilledRef.current.category = false;
-              setForm((f) => ({ ...f, category: e.target.value }));
-            }}
-            placeholder="例：小説、技術書、ビジネス"
-            maxLength={50}
-            className="w-full border border-[#3E383159] bg-white text-[#3E3831] rounded-md px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#DFA37E] focus:border-transparent transition"
-          />
-        </div>
-
-        {/* Cover preview (auto-set from Amazon URL) */}
-        {previewCover && (
-          <div className="flex justify-center">
-            <div
-              className="relative rounded-md overflow-hidden border"
-              style={{
-                width: "80px",
-                height: "110px",
-                borderColor: "#3E3831",
-                boxShadow: "3px 3px 0 rgba(138, 114, 100, 0.6)",
-              }}
-            >
-              <Image
-                src={previewCover}
-                alt="表紙プレビュー"
-                fill
-                className="object-cover"
-                unoptimized
-                onError={() => setCover(null)}
+            {/* Book name */}
+            <div className="space-y-1.5">
+              <Label htmlFor="add-name">
+                タイトル <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="add-name"
+                type="text"
+                value={form.name}
+                onChange={(e) => {
+                  autoFilledRef.current.name = false;
+                  setForm((f) => ({ ...f, name: e.target.value }));
+                }}
+                placeholder="本のタイトルを入力"
+                required
+                maxLength={100}
               />
             </div>
-          </div>
-        )}
 
-        {/* Finish toggle */}
-        <label className="flex items-center gap-3 cursor-pointer">
-          <div
-            className={`relative w-10 h-6 rounded-full transition-colors ${
-              form.finish ? "bg-[#DFA37E]" : "bg-[#E2DED2]"
-            }`}
-            onClick={() => setForm((f) => ({ ...f, finish: !f.finish }))}
-          >
-            <div
-              className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${
-                form.finish ? "translate-x-5" : "translate-x-1"
-              }`}
-            />
-          </div>
-          <span className="text-sm font-medium text-[#3E3831]">読了済み</span>
-        </label>
+            <div className="grid grid-cols-2 gap-3">
+              {/* Author */}
+              <div className="space-y-1.5">
+                <Label htmlFor="add-author">
+                  作者
+                  <span className="text-xs font-normal text-muted-foreground">（任意）</span>
+                </Label>
+                <Input
+                  id="add-author"
+                  type="text"
+                  value={form.author}
+                  onChange={(e) => {
+                    autoFilledRef.current.author = false;
+                    setForm((f) => ({ ...f, author: e.target.value }));
+                  }}
+                  placeholder="例：村上春樹"
+                  maxLength={50}
+                />
+              </div>
 
-        {/* Buttons */}
-        <div className="flex gap-3 pt-2">
-          <button
-            type="button"
-            onClick={resetAndClose}
-            className="flex-1 py-2.5 border border-[#3E383159] text-[#8C8276] rounded-md text-sm font-medium hover:bg-[#FAF6EF] transition-colors"
-          >
-            キャンセル
-          </button>
-          <button
-            type="submit"
-            disabled={!form.name.trim() || lookupStatus === "loading"}
-            className="flex-1 py-2.5 rounded-md border text-sm font-semibold transition-transform active:translate-x-0.5 active:translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{
-              background: "#DFA37E",
-              borderColor: "#3E3831",
-              color: "#3E3831",
-              boxShadow: "3px 3px 0 #8A7264",
-            }}
-          >
-            追加する
-          </button>
-        </div>
-      </form>
-      ) : (
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-semibold text-[#3E3831] mb-1">
-              Amazon URL を貼り付け
-              <span className="ml-1 text-xs font-normal text-gray-400">
-                （1行に1つ。タイトルだけの行も可）
-              </span>
-            </label>
-            <textarea
-              value={bulkText}
-              onChange={(e) => setBulkText(e.target.value)}
-              disabled={bulkRunning}
-              rows={6}
-              placeholder={
-                "https://www.amazon.co.jp/dp/...\nhttps://www.amazon.co.jp/dp/...\n吾輩は猫である"
-              }
-              className="w-full border border-[#3E383159] bg-white text-[#3E3831] rounded-md px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#DFA37E] focus:border-transparent transition resize-y disabled:opacity-60"
-            />
-          </div>
-
-          {/* Finish toggle (applies to all) */}
-          <label className="flex items-center gap-3 cursor-pointer">
-            <div
-              className={`relative w-10 h-6 rounded-full transition-colors ${
-                bulkFinish ? "bg-[#DFA37E]" : "bg-[#E2DED2]"
-              }`}
-              onClick={() => !bulkRunning && setBulkFinish((v) => !v)}
-            >
-              <div
-                className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${
-                  bulkFinish ? "translate-x-5" : "translate-x-1"
-                }`}
-              />
+              {/* Category */}
+              <div className="space-y-1.5">
+                <Label htmlFor="add-category">
+                  カテゴリ
+                  <span className="text-xs font-normal text-muted-foreground">（任意）</span>
+                </Label>
+                <Input
+                  id="add-category"
+                  type="text"
+                  value={form.category}
+                  onChange={(e) => {
+                    autoFilledRef.current.category = false;
+                    setForm((f) => ({ ...f, category: e.target.value }));
+                  }}
+                  placeholder="例：小説、技術書"
+                  maxLength={50}
+                />
+              </div>
             </div>
-            <span className="text-sm font-medium text-[#3E3831]">
-              すべて読了済みとして追加
-            </span>
-          </label>
 
-          {/* Per-line progress */}
-          {bulkLines.length > 0 && (
-            <div className="max-h-44 overflow-y-auto rounded-md border border-[#3E383159] divide-y divide-[#3E383122]">
-              {bulkLines.map((line, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-2 px-3 py-1.5 text-xs"
+            {/* Cover preview (auto-set from Amazon URL) */}
+            <AnimatePresence>
+              {previewCover && (
+                <motion.div
+                  key={previewCover}
+                  className="flex justify-center"
+                  initial={{ opacity: 0, scale: 0.85, rotate: -4 }}
+                  animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                  exit={{ opacity: 0, scale: 0.85 }}
+                  transition={{ type: "spring", stiffness: 300, damping: 20 }}
                 >
-                  <span className="flex-shrink-0 w-4 text-center">
-                    {line.status === "pending" && <span className="text-gray-300">・</span>}
-                    {line.status === "loading" && (
-                      <span className="inline-block w-3 h-3 border-2 border-[#C9805B] border-t-transparent rounded-full animate-spin align-middle" />
-                    )}
-                    {line.status === "added" && <span className="text-green-600">✓</span>}
-                    {line.status === "title_only" && <span className="text-[#C9805B]">✓</span>}
-                    {line.status === "failed" && <span className="text-red-500">✕</span>}
-                  </span>
-                  <span className="truncate text-[#3E3831]" title={line.raw}>
-                    {line.title ?? line.raw}
-                  </span>
-                </div>
-              ))}
+                  <div className="relative w-20 h-[110px] rounded-md overflow-hidden border shadow-lg">
+                    <Image
+                      src={previewCover}
+                      alt="表紙プレビュー"
+                      fill
+                      className="object-cover"
+                      unoptimized
+                      onError={() => setCover(null)}
+                    />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Finish toggle */}
+            <div className="flex items-center gap-3">
+              <Switch
+                id="add-finish"
+                checked={form.finish}
+                onCheckedChange={(checked) => setForm((f) => ({ ...f, finish: checked }))}
+              />
+              <Label htmlFor="add-finish" className="cursor-pointer">
+                読了済み
+              </Label>
             </div>
-          )}
 
-          {bulkDone && (
-            <p className="text-sm text-center" style={{ color: "#3E3831" }}>
-              {(() => {
-                const added = bulkLines.filter(
-                  (l) => l.status === "added" || l.status === "title_only"
-                ).length;
-                const failed = bulkLines.filter((l) => l.status === "failed").length;
-                return failed > 0
-                  ? `${added}冊を追加しました（${failed}件は取得に失敗）`
-                  : `${added}冊を追加しました 🎉`;
-              })()}
-            </p>
-          )}
+            {/* Buttons */}
+            <div className="flex gap-3 pt-2">
+              <Button type="button" variant="outline" onClick={resetAndClose} className="flex-1">
+                キャンセル
+              </Button>
+              <Button
+                type="submit"
+                disabled={!form.name.trim() || lookupStatus === "loading"}
+                className="flex-1"
+              >
+                {isEditing ? "保存する" : "追加する"}
+              </Button>
+            </div>
+          </motion.form>
+        </TabsContent>
 
-          {/* Buttons */}
-          <div className="flex gap-3 pt-2">
-            <button
-              type="button"
-              onClick={resetAndClose}
-              className="flex-1 py-2.5 border border-[#3E383159] text-[#8C8276] rounded-md text-sm font-medium hover:bg-[#FAF6EF] transition-colors"
-            >
-              {bulkDone ? "閉じる" : "キャンセル"}
-            </button>
-            <button
-              type="button"
-              onClick={
-                bulkDone
-                  ? () => {
-                      // Clear for a fresh batch (avoid re-adding the same lines)
-                      setBulkText("");
-                      setBulkLines([]);
-                      setBulkDone(false);
-                    }
-                  : handleBulkSubmit
-              }
-              disabled={bulkRunning || (!bulkDone && !bulkText.trim())}
-              className="flex-1 py-2.5 rounded-md border text-sm font-semibold transition-transform active:translate-x-0.5 active:translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{
-                background: "#DFA37E",
-                borderColor: "#3E3831",
-                color: "#3E3831",
-                boxShadow: "3px 3px 0 #8A7264",
-              }}
-            >
-              {bulkRunning
-                ? "追加中…"
-                : bulkDone
-                ? "続けて追加"
-                : "まとめて追加する"}
-            </button>
-          </div>
-        </div>
-      )}
+        <TabsContent value="bulk">
+          <motion.div
+            className="space-y-4"
+            initial={{ opacity: 0, x: 12 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <div className="space-y-1.5">
+              <Label htmlFor="add-bulk">
+                Amazon URL を貼り付け
+                <span className="text-xs font-normal text-muted-foreground">
+                  （1行に1つ。タイトルだけの行も可）
+                </span>
+              </Label>
+              <Textarea
+                id="add-bulk"
+                value={bulkText}
+                onChange={(e) => setBulkText(e.target.value)}
+                disabled={bulkRunning}
+                rows={6}
+                placeholder={
+                  "https://www.amazon.co.jp/dp/...\nhttps://www.amazon.co.jp/dp/...\n吾輩は猫である"
+                }
+                className="resize-y font-mono text-xs"
+              />
+            </div>
+
+            {/* Finish toggle (applies to all) */}
+            <div className="flex items-center gap-3">
+              <Switch
+                id="add-bulk-finish"
+                checked={bulkFinish}
+                disabled={bulkRunning}
+                onCheckedChange={setBulkFinish}
+              />
+              <Label htmlFor="add-bulk-finish" className="cursor-pointer">
+                すべて読了済みとして追加
+              </Label>
+            </div>
+
+            {/* Per-line progress */}
+            {bulkLines.length > 0 && (
+              <div className="max-h-44 overflow-y-auto rounded-md border divide-y">
+                {bulkLines.map((line, i) => (
+                  <motion.div
+                    key={i}
+                    className="flex items-center gap-2 px-3 py-1.5 text-xs"
+                    initial={{ opacity: 0, x: -8 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: Math.min(i * 0.03, 0.4) }}
+                  >
+                    <span className="flex-shrink-0 w-4 flex justify-center">
+                      <AnimatePresence mode="wait" initial={false}>
+                        <motion.span
+                          key={line.status}
+                          className="flex"
+                          initial={{ scale: 0 }}
+                          animate={{ scale: 1 }}
+                          exit={{ scale: 0 }}
+                          transition={{ type: "spring", stiffness: 500, damping: 20 }}
+                        >
+                          {bulkStatusIcon(line.status)}
+                        </motion.span>
+                      </AnimatePresence>
+                    </span>
+                    <span className="truncate" title={line.raw}>
+                      {line.title ?? line.raw}
+                    </span>
+                  </motion.div>
+                ))}
+              </div>
+            )}
+
+            <AnimatePresence>
+              {bulkDone && (
+                <motion.p
+                  className="text-sm text-center"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                >
+                  {(() => {
+                    const added = bulkLines.filter(
+                      (l) => l.status === "added" || l.status === "title_only"
+                    ).length;
+                    const failed = bulkLines.filter((l) => l.status === "failed").length;
+                    return failed > 0
+                      ? `${added}冊を追加しました（${failed}件は取得に失敗）`
+                      : `${added}冊を追加しました 🎉`;
+                  })()}
+                </motion.p>
+              )}
+            </AnimatePresence>
+
+            {/* Buttons */}
+            <div className="flex gap-3 pt-2">
+              <Button type="button" variant="outline" onClick={resetAndClose} className="flex-1">
+                {bulkDone ? "閉じる" : "キャンセル"}
+              </Button>
+              <Button
+                type="button"
+                onClick={
+                  bulkDone
+                    ? () => {
+                        // Clear for a fresh batch (avoid re-adding the same lines)
+                        setBulkText("");
+                        setBulkLines([]);
+                        setBulkDone(false);
+                      }
+                    : handleBulkSubmit
+                }
+                disabled={bulkRunning || (!bulkDone && !bulkText.trim())}
+                className="flex-1"
+              >
+                {bulkRunning && <Spinner />}
+                {bulkRunning ? "追加中…" : bulkDone ? "続けて追加" : "まとめて追加する"}
+              </Button>
+            </div>
+          </motion.div>
+        </TabsContent>
+      </Tabs>
     </Modal>
   );
 }

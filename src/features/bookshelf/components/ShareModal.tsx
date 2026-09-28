@@ -1,8 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { Check, Copy, Scissors } from "lucide-react";
 import Modal from "@/shared/components/Modal";
-
+import { Button } from "@/shared/ui/button";
+import { Input } from "@/shared/ui/input";
+import { Spinner } from "@/shared/ui/spinner";
 interface ShareModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -10,12 +14,19 @@ interface ShareModalProps {
 
 export default function ShareModal({ isOpen, onClose }: ShareModalProps) {
   const [copied, setCopied] = useState(false);
-  const [shortUrl, setShortUrl] = useState<string | null>(null);
+  // 短縮URLは発行時の本棚データ（?d=）に紐づく。本棚を変えたら使わない
+  const [shortLink, setShortLink] = useState<{ d: string; url: string } | null>(null);
   const [shortening, setShortening] = useState(false);
   const [shortenError, setShortenError] = useState(false);
 
   const currentUrl =
     typeof window !== "undefined" ? window.location.href : "";
+  const currentData =
+    typeof window !== "undefined"
+      ? new URL(window.location.href).searchParams.get("d")
+      : null;
+  const shortUrl =
+    shortLink && shortLink.d === currentData ? shortLink.url : null;
 
   // The short URL is preferred for sharing once generated
   const shareUrl = shortUrl ?? currentUrl;
@@ -37,16 +48,19 @@ export default function ShareModal({ isOpen, onClose }: ShareModalProps) {
   };
 
   const handleShorten = async () => {
+    if (!currentData) return;
     setShortening(true);
     setShortenError(false);
     try {
-      const res = await fetch(
-        `/api/shorten?url=${encodeURIComponent(currentUrl)}`
-      );
+      const res = await fetch("/api/shorten", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ d: currentData }),
+      });
       if (!res.ok) throw new Error("shorten failed");
       const data = (await res.json()) as { shortUrl?: string };
       if (!data.shortUrl) throw new Error("no short url");
-      setShortUrl(data.shortUrl);
+      setShortLink({ d: currentData, url: data.shortUrl });
       await copyText(data.shortUrl);
     } catch {
       setShortenError(true);
@@ -54,78 +68,80 @@ export default function ShareModal({ isOpen, onClose }: ShareModalProps) {
       setShortening(false);
     }
   };
-
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="本棚を共有する">
-      <div className="space-y-4">
-        <p className="text-sm" style={{ color: "#8C8276" }}>
-          下のURLを共有すると、あなたの本棚を相手に見せることができます。
-          <br />
-          本を追加・変更するたびにURLが自動で更新されます。
-        </p>
-
-        <div className="relative">
-          <input
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="本棚を共有する"
+      description="下のURLを共有すると、あなたの本棚を相手に見せることができます。本を追加・変更するたびにURLが自動で更新されます。"
+    >
+      <div className="space-y-3">
+        <motion.div layout>
+          <Input
             type="text"
             readOnly
             value={shareUrl}
-            className="w-full border border-[#3E383159] rounded-md px-4 py-3 pr-12 text-xs text-[#3E3831] bg-[#FAF6EF] focus:outline-none"
+            className="h-10 font-mono text-xs"
             onClick={(e) => (e.target as HTMLInputElement).select()}
           />
-        </div>
+        </motion.div>
 
-        <button
+        <Button
           onClick={() => copyText(shareUrl)}
-          className="w-full py-3 rounded-md border text-sm font-semibold transition-transform active:translate-x-0.5 active:translate-y-0.5"
-          style={
-            copied
-              ? {
-                  background: "#3E3831",
-                  borderColor: "#3E3831",
-                  color: "#F7F1E6",
-                  boxShadow: "3px 3px 0 #8A7264",
-                }
-              : {
-                  background: "#DFA37E",
-                  borderColor: "#3E3831",
-                  color: "#3E3831",
-                  boxShadow: "3px 3px 0 #8A7264",
-                }
-          }
+          size="lg"
+          className="w-full overflow-hidden"
         >
-          {copied ? "✓ コピーしました！" : "🔗 URLをコピー"}
-        </button>
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.span
+              key={copied ? "copied" : "copy"}
+              initial={{ y: 12, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: -12, opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              className="flex items-center gap-2"
+            >
+              {copied ? <Check /> : <Copy />}
+              {copied ? "コピーしました" : "URLをコピー"}
+            </motion.span>
+          </AnimatePresence>
+        </Button>
 
         {/* Short link: useful when the full URL is too long for Slack etc. */}
-        {!shortUrl && (
-          <button
-            onClick={handleShorten}
-            disabled={shortening}
-            className="w-full py-2.5 rounded-md border text-sm font-semibold transition-transform active:translate-x-0.5 active:translate-y-0.5 disabled:opacity-60"
-            style={{
-              background: "#FAF6EF",
-              borderColor: "#3E3831",
-              color: "#3E3831",
-              boxShadow: "3px 3px 0 #8A7264",
-            }}
-          >
-            {shortening ? "発行中…" : "✂️ 短縮URLを発行（Slackなどで長すぎる場合）"}
-          </button>
-        )}
+        <AnimatePresence initial={false}>
+          {!shortUrl && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+            >
+              <Button
+                variant="outline"
+                onClick={handleShorten}
+                disabled={shortening || !currentData}
+                className="w-full"
+              >
+                {shortening ? <Spinner /> : <Scissors />}
+                {shortening ? "発行中…" : "短縮URLを発行"}
+              </Button>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {shortenError && (
-          <p className="text-xs text-center" style={{ color: "#C0594B" }}>
+          <motion.p
+            initial={{ opacity: 0, x: -6 }}
+            animate={{ opacity: 1, x: [6, -4, 2, 0] }}
+            className="text-xs text-center text-destructive"
+          >
             短縮URLの発行に失敗しました。時間をおいて再度お試しください。
-          </p>
+          </motion.p>
         )}
 
-        <div className="text-center">
-          <p className="text-xs" style={{ color: "#B0A698" }}>
-            {shortUrl
-              ? "短縮URLは元のURL（本棚データ）へ転送されます"
-              : "このURLにはあなたの本棚データがすべて含まれています"}
-          </p>
-        </div>
+        <p className="text-xs text-center text-muted-foreground">
+          {shortUrl
+            ? "短縮URLは元のURL（本棚データ）へ転送されます"
+            : "このURLにはあなたの本棚データがすべて含まれています"}
+        </p>
       </div>
     </Modal>
   );

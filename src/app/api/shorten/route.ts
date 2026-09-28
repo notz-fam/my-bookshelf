@@ -1,57 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
+import { decodeBookshelfData } from "@/lib/url";
+import {
+  createShortId,
+  MAX_DATA_LENGTH,
+  ShortLinkUnavailableError,
+} from "@/lib/short-link";
 
-// Shorten a share URL via a third-party service.
-// Proxied through our own API to avoid browser CORS issues and to allow
-// provider fallback. Restricted to our own origin so it can't be abused
-// as an open URL shortener.
+// 本棚データ（?d= の値）を保存して、このアプリのドメインの短縮URL（/s/{id}）を返す。
+// 本棚データとして読めるものだけを受け付けるので、任意URLの短縮には使えない。
 
-// da.gd: clean 302 redirect straight to the target, no affiliate interstitial
-async function shortenDaGd(url: string): Promise<string | null> {
+export async function POST(request: NextRequest) {
+  let d: unknown;
   try {
-    const res = await fetch(`https://da.gd/s?url=${encodeURIComponent(url)}`);
-    if (!res.ok) return null;
-    const text = (await res.text()).trim();
-    return text.startsWith("http") ? text : null;
+    ({ d } = (await request.json()) as { d?: unknown });
   } catch {
-    return null;
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
-}
 
-// TinyURL: reliable fallback (may route through an affiliate redirect)
-async function shortenTinyUrl(url: string): Promise<string | null> {
+  if (typeof d !== "string" || !d || d.length > MAX_DATA_LENGTH) {
+    return NextResponse.json({ error: "d parameter required" }, { status: 400 });
+  }
+  if (!decodeBookshelfData(d)) {
+    return NextResponse.json({ error: "Invalid bookshelf data" }, { status: 400 });
+  }
+
   try {
-    const res = await fetch(
-      `https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`
-    );
-    if (!res.ok) return null;
-    const text = (await res.text()).trim();
-    return text.startsWith("http") ? text : null;
-  } catch {
-    return null;
+    const id = await createShortId(d);
+    return NextResponse.json({ shortUrl: `${request.nextUrl.origin}/s/${id}` });
+  } catch (e) {
+    if (e instanceof ShortLinkUnavailableError) {
+      return NextResponse.json({ error: "Short links are not configured" }, { status: 503 });
+    }
+    return NextResponse.json({ error: "Failed to shorten URL" }, { status: 500 });
   }
-}
-
-export async function GET(request: NextRequest) {
-  const url = request.nextUrl.searchParams.get("url");
-  if (!url) {
-    return NextResponse.json({ error: "url parameter required" }, { status: 400 });
-  }
-
-  // Only shorten URLs that point back to this app
-  let target: URL;
-  try {
-    target = new URL(url);
-  } catch {
-    return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
-  }
-  if (target.hostname !== request.nextUrl.hostname) {
-    return NextResponse.json({ error: "URL host not allowed" }, { status: 400 });
-  }
-
-  const shortUrl = (await shortenDaGd(url)) ?? (await shortenTinyUrl(url));
-  if (!shortUrl) {
-    return NextResponse.json({ error: "Failed to shorten URL" }, { status: 502 });
-  }
-
-  return NextResponse.json({ shortUrl });
 }

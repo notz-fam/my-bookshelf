@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { AnimatePresence, LayoutGroup, motion } from "motion/react";
+import { BookOpen, X } from "lucide-react";
+import { Button } from "@/shared/ui/button";
 import type { Book, DisplayStyle } from "../types";
 import BookItem, { getBookWidth } from "./BookItem";
 
@@ -12,6 +15,8 @@ interface BookshelfProps {
   isOwner?: boolean;
   onRemoveBook?: (id: number) => void;
   onToggleDisplay?: (id: number, display: DisplayStyle) => void;
+  onToggleFinish?: (id: number, finish: boolean) => void;
+  onEditBook?: (book: Book) => void;
   onReorderBooks?: (fromIndex: number, toIndex: number) => void;
   onRemoveAuthorDivider?: (author: string) => void;
 }
@@ -27,12 +32,6 @@ const MIN_ROWS = 3;
 
 const CATEGORY_DIVIDER_WIDTH = 34;
 const AUTHOR_DIVIDER_WIDTH = 28;
-
-// テーマ: フラットな図形＋細いインク線＋ずらし影（紙コラージュ風）
-const INK = "#3E3831";
-const FRAME_BG = "#D9C3A3";
-const PLANK_BG = "#C9AC83";
-const SHELF_BG = "#F4EDDF";
 
 interface DividerItem {
   kind: "category" | "author";
@@ -103,14 +102,7 @@ function packIntoRows(chunks: ShelfChunk[]): ShelfChunk[][] {
 
 function ShelfPlank() {
   return (
-    <div
-      className="w-full"
-      style={{
-        height: "14px",
-        background: PLANK_BG,
-        boxShadow: "0 3px 0 rgba(62, 56, 49, 0.15)",
-      }}
-    />
+    <div className="h-3.5 w-full bg-shelf-plank shadow-[0_4px_10px_-4px_rgb(0_0_0/0.35)]" />
   );
 }
 
@@ -152,8 +144,10 @@ function ShelfDivider({
       }
     >
       {!isCategory && isOwner && onRemove && (
-        <button
-          className="absolute -top-2 -right-1 z-10 w-5 h-5 bg-red-500 hover:bg-red-600 text-white rounded-full text-xs hidden group-hover:flex items-center justify-center shadow-md leading-none"
+        <Button
+          variant="destructive"
+          size="icon-sm"
+          className="absolute -top-3 -right-2 z-10 size-6 rounded-full shadow-md opacity-0 scale-75 pointer-events-none transition-all duration-200 group-hover:opacity-100 group-hover:scale-100 group-hover:pointer-events-auto [&_svg:not([class*='size-'])]:size-3"
           onClick={(e) => {
             e.stopPropagation();
             onRemove(divider.label);
@@ -161,29 +155,22 @@ function ShelfDivider({
           title={`「${divider.label}」の仕切りを削除`}
           aria-label={`${divider.label}の仕切りを削除`}
         >
-          ×
-        </button>
+          <X />
+        </Button>
       )}
       <div
-        className="rounded-t-md flex flex-col items-center pt-2 pb-2 border"
-        style={{
-          height: `${height}px`,
-          background: isCategory ? "#ECD9BF" : "#E2DED2",
-          borderColor: "rgba(62, 56, 49, 0.35)",
-          boxShadow: "2px 2px 0 rgba(138, 114, 100, 0.45)",
-        }}
+        className={`rounded-t-lg flex flex-col items-center pt-2 pb-2 border border-border ${
+          isCategory ? "bg-divider-category" : "bg-divider-author"
+        }`}
+        style={{ height: `${height}px` }}
       >
         {/* 仕切り板の指穴 */}
-        <div
-          className="rounded-full mb-2 flex-shrink-0"
-          style={{ width: "7px", height: "7px", background: INK }}
-        />
+        <div className="size-[7px] rounded-full mb-2 flex-shrink-0 bg-foreground/70" />
         <span
-          className={`font-semibold leading-tight text-center ${
+          className={`font-semibold leading-tight text-center text-divider-fg ${
             isCategory ? "text-xs" : "text-[11px]"
           }`}
           style={{
-            color: isCategory ? "#6E5B48" : "#5A584E",
             writingMode: "vertical-rl",
             textOrientation: "mixed",
             overflow: "hidden",
@@ -197,6 +184,26 @@ function ShelfDivider({
   );
 }
 
+// 本（＋直前の仕切り）1チャンクの出入りアニメーション。
+// custom には「現在棚にある本のID集合」が渡る。段をまたいだ移動では
+// 旧インスタンスを即座に消し、layoutId による共有レイアウト遷移に任せる。
+function chunkVariants(bookId: number) {
+  return {
+    exit: (currentIds: Set<number>) =>
+      currentIds.has(bookId)
+        ? { opacity: 0, transition: { duration: 0 } }
+        : {
+            opacity: 0,
+            scale: 0.6,
+            y: -24,
+            filter: "blur(4px)",
+            transition: { duration: 0.22, ease: "easeIn" as const },
+          },
+  };
+}
+
+const LAYOUT_SPRING = { type: "spring", stiffness: 380, damping: 32 } as const;
+
 export default function Bookshelf({
   books,
   hiddenAuthors,
@@ -204,13 +211,25 @@ export default function Bookshelf({
   isOwner,
   onRemoveBook,
   onToggleDisplay,
+  onToggleFinish,
+  onEditBook,
   onReorderBooks,
   onRemoveAuthorDivider,
 }: BookshelfProps) {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
+  // 直前の books にあった本。ここに無い本は「新しく置かれた本」として上から落とす
+  // （初回は空なので、URLから読み込んだ本も順に落ちてくる）
+  const [prevBooks, setPrevBooks] = useState(books);
+  const [knownIds, setKnownIds] = useState<Set<number>>(() => new Set());
+  if (books !== prevBooks) {
+    setKnownIds(new Set(prevBooks.map((b) => b.id)));
+    setPrevBooks(books);
+  }
 
   const rows = packIntoRows(buildChunks(books, hiddenAuthors ?? []));
+  const currentIds = new Set(books.map((b) => b.id));
+  const freshOrder = books.filter((b) => !knownIds.has(b.id)).map((b) => b.id);
 
   const handleDrop = (targetIndex: number) => {
     if (dragIndex !== null && dragIndex !== targetIndex) {
@@ -246,91 +265,126 @@ export default function Bookshelf({
       : {};
 
   return (
-    <div className="overflow-x-auto pb-6">
-      <div className="mx-auto" style={{ width: `${FRAME_WIDTH}px` }}>
-        {/* 外枠（フラットなタン＋インク線＋ずらし影） */}
+    <div className="overflow-x-auto pb-10 pt-2">
+      <motion.div
+        className="mx-auto"
+        style={{ width: `${FRAME_WIDTH}px` }}
+        initial={{ opacity: 0, y: 24, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ type: "spring", stiffness: 200, damping: 26, delay: 0.1 }}
+      >
+        {/* 外枠 */}
         <div
-          className="rounded-md border"
-          style={{
-            background: FRAME_BG,
-            borderColor: INK,
-            padding: `${FRAME_BORDER}px ${FRAME_BORDER}px 0`,
-            boxShadow: "8px 8px 0 #8A7264",
-          }}
+          className="rounded-2xl border bg-shelf-frame shadow-shelf"
+          style={{ padding: `${FRAME_BORDER}px ${FRAME_BORDER}px 0` }}
         >
-          {rows.map((row, rowIndex) => (
-            <div key={rowIndex}>
-              {/* 棚の内部（暗い背板） */}
-              <div
-                className="flex items-end"
-                style={{
-                  height: `${SHELF_HEIGHT}px`,
-                  width: `${SHELF_INNER_WIDTH + SHELF_PADDING_X * 2}px`,
-                  padding: `0 ${SHELF_PADDING_X}px`,
-                  gap: `${BOOK_GAP}px`,
-                  background: SHELF_BG,
-                  boxShadow: "inset 0 6px 10px rgba(62, 56, 49, 0.1)",
-                }}
-                {...rowDropProps(row)}
+          <LayoutGroup>
+            {rows.map((row, rowIndex) => (
+              <motion.div
+                key={rowIndex}
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 + rowIndex * 0.08, duration: 0.4, ease: "easeOut" }}
               >
-                {row.map(({ dividers, book, index }) => (
-                  <div
-                    key={book.id}
-                    className="flex items-end flex-shrink-0"
-                    style={{ gap: `${BOOK_GAP}px` }}
-                  >
-                    {dividers.map((divider) => (
-                      <ShelfDivider
-                        key={`${divider.kind}-${divider.label}`}
-                        divider={divider}
-                        beforeIndex={index}
-                        isOwner={isOwner}
-                        onDropAt={handleDrop}
-                        onRemove={onRemoveAuthorDivider}
-                      />
-                    ))}
-                    <BookItem
-                      book={book}
-                      index={index}
-                      isOwner={isOwner}
-                      isNew={newBookIds?.includes(book.id)}
-                      onRemove={onRemoveBook}
-                      onToggleDisplay={onToggleDisplay}
-                      onDragStartItem={setDragIndex}
-                      onDragOverItem={setOverIndex}
-                      onDropItem={handleDrop}
-                      onDragEndItem={handleDragEnd}
-                      isDragging={dragIndex === index}
-                      isDragOver={
-                        overIndex === index &&
-                        dragIndex !== null &&
-                        dragIndex !== index
-                      }
-                    />
-                  </div>
-                ))}
-                {books.length === 0 && rowIndex === 0 && (
-                  <div className="w-full self-center text-center">
-                    <p className="text-4xl mb-3">📚</p>
-                    <p
-                      className="text-base font-medium"
-                      style={{ color: "#8C8276" }}
+                {/* 棚の内部（背板） */}
+                <div
+                  className="relative flex items-end rounded-t-md bg-shelf-back shadow-shelf-inset"
+                  style={{
+                    height: `${SHELF_HEIGHT}px`,
+                    width: `${SHELF_INNER_WIDTH + SHELF_PADDING_X * 2}px`,
+                    padding: `0 ${SHELF_PADDING_X}px`,
+                    gap: `${BOOK_GAP}px`,
+                  }}
+                  {...rowDropProps(row)}
+                >
+                  <AnimatePresence mode="popLayout" custom={currentIds}>
+                    {row.map(({ dividers, book, index }) => {
+                      const freshPos = freshOrder.indexOf(book.id);
+                      return (
+                        <motion.div
+                          key={book.id}
+                          layoutId={`book-${book.id}`}
+                          layout="position"
+                          className="relative flex items-end flex-shrink-0 hover:z-20"
+                          style={{ gap: `${BOOK_GAP}px` }}
+                          variants={chunkVariants(book.id)}
+                          custom={currentIds}
+                          initial={
+                            freshPos >= 0
+                              ? { opacity: 0, y: -80, rotate: -6 }
+                              : false
+                          }
+                          animate={{ opacity: 1, y: 0, rotate: 0 }}
+                          exit="exit"
+                          transition={{
+                            ...LAYOUT_SPRING,
+                            delay: freshPos > 0 ? Math.min(freshPos * 0.035, 0.8) : 0,
+                            layout: LAYOUT_SPRING,
+                          }}
+                        >
+                          {dividers.map((divider) => (
+                            <ShelfDivider
+                              key={`${divider.kind}-${divider.label}`}
+                              divider={divider}
+                              beforeIndex={index}
+                              isOwner={isOwner}
+                              onDropAt={handleDrop}
+                              onRemove={onRemoveAuthorDivider}
+                            />
+                          ))}
+                          <BookItem
+                            book={book}
+                            index={index}
+                            isOwner={isOwner}
+                            isNew={newBookIds?.includes(book.id)}
+                            onRemove={onRemoveBook}
+                            onToggleDisplay={onToggleDisplay}
+                            onToggleFinish={onToggleFinish}
+                            onEdit={onEditBook}
+                            onDragStartItem={setDragIndex}
+                            onDragOverItem={setOverIndex}
+                            onDropItem={handleDrop}
+                            onDragEndItem={handleDragEnd}
+                            isDragging={dragIndex === index}
+                            isDragOver={
+                              overIndex === index &&
+                              dragIndex !== null &&
+                              dragIndex !== index
+                            }
+                          />
+                        </motion.div>
+                      );
+                    })}
+                  </AnimatePresence>
+                  {books.length === 0 && rowIndex === 0 && (
+                    <motion.div
+                      className="w-full self-center flex flex-col items-center text-center"
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.4 }}
                     >
-                      まだ本が登録されていません
-                    </p>
-                    {isOwner && (
-                      <p className="text-sm mt-1" style={{ color: "#B0A698" }}>
-                        「本を追加」ボタンから本を登録できます
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-              <ShelfPlank />
-            </div>
-          ))}
+                      <motion.div
+                        className="mb-3 flex size-12 items-center justify-center rounded-xl border bg-background text-muted-foreground"
+                        animate={{ y: [0, -4, 0] }}
+                        transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+                      >
+                        <BookOpen className="size-5" />
+                      </motion.div>
+                      <p className="text-base font-medium">まだ本が登録されていません</p>
+                      {isOwner && (
+                        <p className="text-sm mt-1 text-muted-foreground">
+                          「本を追加」ボタンから本を登録できます
+                        </p>
+                      )}
+                    </motion.div>
+                  )}
+                </div>
+                <ShelfPlank />
+              </motion.div>
+            ))}
+          </LayoutGroup>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }
