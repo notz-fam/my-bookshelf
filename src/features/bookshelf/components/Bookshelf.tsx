@@ -4,16 +4,13 @@ import { useState } from "react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { BookOpen, X } from "lucide-react";
 import { Button } from "@/shared/ui/button";
-import type { Book, DisplayStyle } from "../types";
+import type { Book, DisplayStyle, ShelfKey } from "../types";
 import BookItem from "./BookItem";
 import {
-  AUTHOR_DIVIDER_HEIGHT,
-  AUTHOR_DIVIDER_WIDTH,
   BOOK_GAP,
   buildChunks,
-  CATEGORY_DIVIDER_HEIGHT,
-  CATEGORY_DIVIDER_WIDTH,
   type DividerItem,
+  getDividerSize,
   FRAME_BORDER,
   FRAME_WIDTH,
   packIntoRows,
@@ -26,6 +23,10 @@ import {
 interface BookshelfProps {
   books: Book[];
   hiddenAuthors?: string[];
+  /** 仕切りの主キー（大きい仕切り）。省略時は "category" */
+  primaryKey?: ShelfKey;
+  /** すべての仕切りを隠す */
+  hideDividers?: boolean;
   /** このセッションで追加された本のID（NEWバッジ表示用） */
   newBookIds?: number[];
   isOwner?: boolean;
@@ -61,8 +62,8 @@ function ShelfDivider({
   onRemove,
 }: ShelfDividerProps) {
   const isCategory = divider.kind === "category";
-  const width = isCategory ? CATEGORY_DIVIDER_WIDTH : AUTHOR_DIVIDER_WIDTH;
-  const height = isCategory ? CATEGORY_DIVIDER_HEIGHT : AUTHOR_DIVIDER_HEIGHT;
+  const isPrimary = divider.level === "primary";
+  const { width, height } = getDividerSize(divider);
 
   return (
     <div
@@ -105,7 +106,7 @@ function ShelfDivider({
         <div className="size-[7px] rounded-full mb-2 flex-shrink-0 bg-foreground/70" />
         <span
           className={`font-semibold leading-tight text-center text-divider-fg ${
-            isCategory ? "text-xs" : "text-[11px]"
+            isPrimary ? "text-xs" : "text-[11px]"
           }`}
           style={{
             writingMode: "vertical-rl",
@@ -150,6 +151,8 @@ const LAYOUT_SPRING = { type: "spring", stiffness: 380, damping: 32 } as const;
 export default function Bookshelf({
   books,
   hiddenAuthors,
+  primaryKey,
+  hideDividers,
   newBookIds,
   isOwner,
   onRemoveBook,
@@ -170,7 +173,7 @@ export default function Bookshelf({
     setPrevBooks(books);
   }
 
-  const rows = packIntoRows(buildChunks(books, hiddenAuthors ?? []));
+  const rows = packIntoRows(buildChunks(books, { hiddenAuthors, primaryKey, hideDividers }));
   const currentIds: PresenceIds = {
     books: new Set(books.map((b) => b.id)),
     dividers: new Set(

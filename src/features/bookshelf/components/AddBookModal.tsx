@@ -3,13 +3,12 @@
 import { useState, useRef } from "react";
 import Image from "next/image";
 import { AnimatePresence, motion } from "motion/react";
-import { AlertCircle, Check, CircleDashed, Sparkles, X } from "lucide-react";
+import { AlertCircle, Check, CircleDashed, Plus, Sparkles, X } from "lucide-react";
 import Modal from "@/shared/components/Modal";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Label } from "@/shared/ui/label";
 import { Switch } from "@/shared/ui/switch";
-import { Textarea } from "@/shared/ui/textarea";
 import { Spinner } from "@/shared/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { extractAsinFromUrl, getAmazonCoverUrl } from "@/lib/url";
@@ -43,6 +42,12 @@ interface BulkLine {
   raw: string;
   status: BulkLineStatus;
   title?: string;
+}
+
+/** まとめて追加の入力行（key は React の key とフォーカス移動用） */
+interface BulkRow {
+  key: number;
+  value: string;
 }
 
 // How many lookups to run at once (Amazon scraping is slow; stay polite)
@@ -83,7 +88,10 @@ export default function AddBookModal({
   const autoFilledRef = useRef({ name: false, author: false, category: false });
 
   // --- Bulk add state ---
-  const [bulkText, setBulkText] = useState("");
+  const [bulkRows, setBulkRows] = useState<BulkRow[]>([{ key: 0, value: "" }]);
+  const nextRowKeyRef = useRef(1);
+  // 行を追加・削除したあとにフォーカスを移す行（入力欄の ref コールバックで拾う）
+  const focusRowKeyRef = useRef<number | null>(null);
   const [bulkFinish, setBulkFinish] = useState(true);
   const [bulkLines, setBulkLines] = useState<BulkLine[]>([]);
   const [bulkRunning, setBulkRunning] = useState(false);
@@ -181,20 +189,69 @@ export default function AddBookModal({
     setLookupStatus("idle");
     autoFilledRef.current = { name: false, author: false, category: false };
     setMode("single");
-    setBulkText("");
+    resetBulkRows();
     setBulkLines([]);
     setBulkRunning(false);
     setBulkDone(false);
     onClose();
   };
 
-  // Process the pasted lines: Amazon URLs get a full lookup, other lines are
-  // added as title-only books. Runs a small concurrency pool with live status.
-  const handleBulkSubmit = async () => {
-    const parsed = bulkText
-      .split("\n")
+  // --- まとめて追加の入力行 ---
+  const makeRow = (value = ""): BulkRow => ({ key: nextRowKeyRef.current++, value });
+
+  const resetBulkRows = () => setBulkRows([makeRow()]);
+
+  /** index の行の後ろに行を挿入し、最後に挿入した行へフォーカスを移す */
+  const insertRowsAfter = (index: number, values: string[]) => {
+    const rows = values.map(makeRow);
+    focusRowKeyRef.current = rows[rows.length - 1].key;
+    setBulkRows((prev) => [...prev.slice(0, index + 1), ...rows, ...prev.slice(index + 1)]);
+  };
+
+  const updateRow = (index: number, value: string) =>
+    setBulkRows((prev) => prev.map((r, i) => (i === index ? { ...r, value } : r)));
+
+  const removeRow = (index: number) => {
+    if (bulkRows.length === 1) {
+      // 最後の1行は消さずに空にする
+      focusRowKeyRef.current = bulkRows[0].key;
+      setBulkRows([{ ...bulkRows[0], value: "" }]);
+      return;
+    }
+    focusRowKeyRef.current = bulkRows[Math.max(0, index - 1)].key;
+    setBulkRows((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleRowKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    // 日本語入力の変換確定の Enter では行を増やさない
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      insertRowsAfter(index, [""]);
+    } else if (e.key === "Backspace" && bulkRows[index].value === "" && bulkRows.length > 1) {
+      e.preventDefault();
+      removeRow(index);
+    }
+  };
+
+  // 複数行をまとめて貼り付けたら行に分ける
+  const handleRowPaste = (index: number, e: React.ClipboardEvent<HTMLInputElement>) => {
+    const lines = e.clipboardData
+      .getData("text")
+      .split(/\r?\n/)
       .map((s) => s.trim())
       .filter(Boolean);
+    if (lines.length < 2) return;
+    e.preventDefault();
+    const [first, ...rest] = lines;
+    updateRow(index, bulkRows[index].value + first);
+    insertRowsAfter(index, rest);
+  };
+
+  // Process the entered lines: Amazon URLs get a full lookup, other lines are
+  // added as title-only books. Runs a small concurrency pool with live status.
+  const handleBulkSubmit = async () => {
+    const parsed = bulkRows.map((r) => r.value.trim()).filter(Boolean);
     if (parsed.length === 0) return;
 
     setBulkLines(parsed.map((raw) => ({ raw, status: "pending" })));
@@ -467,23 +524,72 @@ export default function AddBookModal({
             transition={{ duration: 0.2 }}
           >
             <div className="space-y-1.5">
-              <Label htmlFor="add-bulk">
+              <Label htmlFor={`add-bulk-row-${bulkRows[0].key}`}>
                 Amazon URL を貼り付け
                 <span className="text-xs font-normal text-muted-foreground">
-                  （1行に1つ。タイトルだけの行も可）
+                  （1行に1冊。タイトルだけでも可）
                 </span>
               </Label>
-              <Textarea
-                id="add-bulk"
-                value={bulkText}
-                onChange={(e) => setBulkText(e.target.value)}
+              <div className="max-h-60 space-y-1.5 overflow-y-auto p-0.5">
+                <AnimatePresence initial={false}>
+                  {bulkRows.map((row, i) => (
+                    <motion.div
+                      key={row.key}
+                      className="flex items-center gap-1.5"
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.15 }}
+                    >
+                      <span className="w-5 flex-shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                        {i + 1}
+                      </span>
+                      <Input
+                        id={`add-bulk-row-${row.key}`}
+                        ref={(el) => {
+                          if (el && focusRowKeyRef.current === row.key) {
+                            focusRowKeyRef.current = null;
+                            el.focus();
+                          }
+                        }}
+                        value={row.value}
+                        onChange={(e) => updateRow(i, e.target.value)}
+                        onKeyDown={(e) => handleRowKeyDown(i, e)}
+                        onPaste={(e) => handleRowPaste(i, e)}
+                        disabled={bulkRunning}
+                        placeholder={i === 0 ? "https://www.amazon.co.jp/dp/..." : undefined}
+                        aria-label={`${i + 1}冊目`}
+                        className="h-8 min-w-0 font-mono text-xs"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className="size-7 flex-shrink-0 text-muted-foreground"
+                        onClick={() => removeRow(i)}
+                        disabled={bulkRunning || (bulkRows.length === 1 && !row.value)}
+                        aria-label={`${i + 1}行目を削除`}
+                      >
+                        <X />
+                      </Button>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full border-dashed text-muted-foreground"
+                onClick={() => insertRowsAfter(bulkRows.length - 1, [""])}
                 disabled={bulkRunning}
-                rows={6}
-                placeholder={
-                  "https://www.amazon.co.jp/dp/...\nhttps://www.amazon.co.jp/dp/...\n吾輩は猫である"
-                }
-                className="resize-y font-mono text-xs"
-              />
+                aria-label="行を追加"
+              >
+                <Plus />
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Enter でも次の行を追加できます。複数行をまとめて貼り付けると自動で分かれます。
+              </p>
             </div>
 
             {/* Finish toggle (applies to all) */}
@@ -564,13 +670,13 @@ export default function AddBookModal({
                   bulkDone
                     ? () => {
                         // Clear for a fresh batch (avoid re-adding the same lines)
-                        setBulkText("");
+                        resetBulkRows();
                         setBulkLines([]);
                         setBulkDone(false);
                       }
                     : handleBulkSubmit
                 }
-                disabled={bulkRunning || (!bulkDone && !bulkText.trim())}
+                disabled={bulkRunning || (!bulkDone && !bulkRows.some((r) => r.value.trim()))}
                 className="flex-1"
               >
                 {bulkRunning && <Spinner />}

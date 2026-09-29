@@ -1,4 +1,4 @@
-import type { Book, DisplayStyle } from "./types";
+import type { Book, BookshelfData, DisplayStyle, ShelfKey } from "./types";
 
 // 本棚の並べ方と本の見た目を決める純粋なロジック。
 // 画面（Bookshelf / BookItem）と OGP 画像（/api/og）で同じ本棚になるように共有する。
@@ -58,16 +58,25 @@ export const SHELF_PADDING_X = 12;
 export const FRAME_WIDTH = SHELF_INNER_WIDTH + SHELF_PADDING_X * 2 + FRAME_BORDER * 2;
 const MIN_ROWS = 3;
 
-export const CATEGORY_DIVIDER_WIDTH = 34;
-export const AUTHOR_DIVIDER_WIDTH = 28;
-export const CATEGORY_DIVIDER_HEIGHT = 214;
-export const AUTHOR_DIVIDER_HEIGHT = 178;
+// 主キーの仕切りは大きく、サブキーの仕切りは小さい
+const PRIMARY_DIVIDER_WIDTH = 34;
+const SECONDARY_DIVIDER_WIDTH = 28;
+const PRIMARY_DIVIDER_HEIGHT = 214;
+const SECONDARY_DIVIDER_HEIGHT = 178;
 
 export interface DividerItem {
-  kind: "category" | "author";
+  kind: ShelfKey;
+  /** 主キー（大）かサブキー（小）か */
+  level: "primary" | "secondary";
   label: string;
   /** 本の並べ替えをまたいで同じ仕切りを識別するためのキー（種類＋ラベル＋出現順） */
   key: string;
+}
+
+export function getDividerSize(divider: DividerItem): { width: number; height: number } {
+  return divider.level === "primary"
+    ? { width: PRIMARY_DIVIDER_WIDTH, height: PRIMARY_DIVIDER_HEIGHT }
+    : { width: SECONDARY_DIVIDER_WIDTH, height: SECONDARY_DIVIDER_HEIGHT };
 }
 
 // 本1冊＋その直前に立てる仕切り。折り返し時に泣き別れしないよう1チャンクで扱う
@@ -77,30 +86,49 @@ export interface ShelfChunk {
   index: number;
 }
 
-// 並び順の中でカテゴリ・作者が切り替わる位置に仕切りを立てる
-export function buildChunks(books: Book[], hiddenAuthors: string[]): ShelfChunk[] {
+/** 仕切りの立て方に関わる本棚の設定（BookshelfData の一部をそのまま渡せる） */
+export type DividerOptions = Pick<BookshelfData, "hiddenAuthors" | "primaryKey" | "hideDividers">;
+
+// 並び順の中でカテゴリ・作者が切り替わる位置に仕切りを立てる。
+// 主キーが変わったら主キーの仕切り（大）、主キーが同じでサブキーが変わったらサブキーの仕切り（小）。
+export function buildChunks(
+  books: Book[],
+  { hiddenAuthors = [], primaryKey = "category", hideDividers = false }: DividerOptions = {}
+): ShelfChunk[] {
+  if (hideDividers) return books.map((book, index) => ({ dividers: [], book, index }));
+  const secondaryKey: ShelfKey = primaryKey === "category" ? "author" : "category";
   // 同じカテゴリ・作者の仕切りが離れた位置に複数立つこともあるので出現順で区別する
   const seen = new Map<string, number>();
-  const makeKey = (kind: DividerItem["kind"], label: string) => {
+  const makeDivider = (
+    kind: ShelfKey,
+    level: DividerItem["level"],
+    label: string
+  ): DividerItem => {
     const base = `${kind}:${label}`;
     const n = seen.get(base) ?? 0;
     seen.set(base, n + 1);
-    return `${base}#${n}`;
+    return { kind, level, label, key: `${base}#${n}` };
   };
+  const valueOf = (book: Book, key: ShelfKey) =>
+    (key === "category" ? book.category : book.author) ?? null;
+  // 作者の仕切りは × で消せる（hiddenAuthors）。カテゴリの仕切りは消せない
+  const isVisible = (key: ShelfKey, label: string) =>
+    key === "category" || !hiddenAuthors.includes(label);
+
   return books.map((book, index) => {
     const prev = index > 0 ? books[index - 1] : null;
-    const category = book.category ?? null;
-    const author = book.author ?? null;
-    const categoryChanged = !prev || (prev.category ?? null) !== category;
-    const authorChanged =
-      !prev || categoryChanged || (prev.author ?? null) !== author;
+    const primary = valueOf(book, primaryKey);
+    const secondary = valueOf(book, secondaryKey);
+    const primaryChanged = !prev || valueOf(prev, primaryKey) !== primary;
+    const secondaryChanged =
+      !prev || primaryChanged || valueOf(prev, secondaryKey) !== secondary;
 
     const dividers: DividerItem[] = [];
-    if (category && categoryChanged) {
-      dividers.push({ kind: "category", label: category, key: makeKey("category", category) });
+    if (primary && primaryChanged && isVisible(primaryKey, primary)) {
+      dividers.push(makeDivider(primaryKey, "primary", primary));
     }
-    if (author && authorChanged && !hiddenAuthors.includes(author)) {
-      dividers.push({ kind: "author", label: author, key: makeKey("author", author) });
+    if (secondary && secondaryChanged && isVisible(secondaryKey, secondary)) {
+      dividers.push(makeDivider(secondaryKey, "secondary", secondary));
     }
     return { dividers, book, index };
   });
@@ -108,10 +136,7 @@ export function buildChunks(books: Book[], hiddenAuthors: string[]): ShelfChunk[
 
 function chunkWidth(chunk: ShelfChunk): number {
   const dividersWidth = chunk.dividers.reduce(
-    (sum, d) =>
-      sum +
-      (d.kind === "category" ? CATEGORY_DIVIDER_WIDTH : AUTHOR_DIVIDER_WIDTH) +
-      BOOK_GAP,
+    (sum, d) => sum + getDividerSize(d).width + BOOK_GAP,
     0
   );
   return dividersWidth + getBookWidth(chunk.book);

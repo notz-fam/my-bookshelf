@@ -28,7 +28,8 @@ export default function Modal({
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className="max-h-[90vh] overflow-y-auto sm:max-w-md"
+        // grid-cols-[minmax(0,1fr)]: 中身（長いURLなど）の幅でグリッドの列がモーダルより広がらないようにする
+        className="max-h-[90vh] grid-cols-[minmax(0,1fr)] overflow-y-auto sm:max-w-md"
         overlayClassName="backdrop-blur-sm"
       >
         <DialogHeader>

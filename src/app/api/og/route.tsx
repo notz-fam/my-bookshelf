@@ -67,11 +67,12 @@ export async function GET(request: NextRequest) {
   const name = data?.name ?? "私の本棚";
   // 画像では表紙が見えるように、全冊を面出しで並べる（画面での並べ方の設定は使わない）
   const books = (data?.books ?? []).map((b) => ({ ...b, display: "face-out" as const }));
-  const hiddenAuthors = data?.hiddenAuthors ?? [];
+  // 仕切りの設定（作者ごとの非表示・主キー・オン/オフ）は画面と同じにする
+  const dividerOptions = data ?? {};
 
-  const text = textInImage(name, books, hiddenAuthors);
+  const text = textInImage(name, books, dividerOptions);
   const latin = Array.from(new Set(text.replace(/[^\x20-\x7e]/g, ""))).join("");
-  const shown = visibleBooks(books, hiddenAuthors);
+  const shown = visibleBooks(books, dividerOptions);
 
   const [inter, noto, coverList] = await Promise.all([
     loadFont("Inter Tight", 600, latin),
@@ -90,7 +91,7 @@ export async function GET(request: NextRequest) {
       <ShelfImage
         name={name}
         books={books}
-        hiddenAuthors={hiddenAuthors}
+        dividerOptions={dividerOptions}
         covers={covers}
         fontFamily={fonts.length ? fonts.map((f) => `"${f.name}"`).join(", ") : undefined}
       />

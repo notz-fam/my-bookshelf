@@ -9,6 +9,7 @@ import Bookshelf from "./Bookshelf";
 import BookshelfHeader from "./BookshelfHeader";
 import AddBookModal from "./AddBookModal";
 import ShareModal from "./ShareModal";
+import ShelfToolbar from "./ShelfToolbar";
 
 export default function BookshelfClient() {
   const searchParams = useSearchParams();
@@ -41,6 +42,8 @@ export default function BookshelfClient() {
       name: store.name,
       books: store.books,
       hiddenAuthors: store.hiddenAuthors,
+      primaryKey: store.primaryKey,
+      hideDividers: store.hideDividers,
     };
     const encoded = encodeBookshelfData(data);
     if (!encoded) return;
@@ -51,7 +54,7 @@ export default function BookshelfClient() {
 
     url.searchParams.set("d", encoded);
     window.history.replaceState(null, "", url.toString());
-  }, [store.name, store.books, store.hiddenAuthors]);
+  }, [store.name, store.books, store.hiddenAuthors, store.primaryKey, store.hideDividers]);
 
   return (
     <div className="min-h-screen">
@@ -66,9 +69,19 @@ export default function BookshelfClient() {
       />
 
       <main className="pb-16 pt-8 px-4">
+        <ShelfToolbar
+          books={store.books}
+          primaryKey={store.primaryKey}
+          hideDividers={store.hideDividers}
+          onSort={store.sortBooks}
+          onHideDividersChange={store.setHideDividers}
+          onDisplayAll={store.setAllDisplay}
+        />
         <Bookshelf
           books={store.books}
           hiddenAuthors={store.hiddenAuthors}
+          primaryKey={store.primaryKey}
+          hideDividers={store.hideDividers}
           newBookIds={store.newBookIds}
           isOwner
           onRemoveBook={store.removeBook}

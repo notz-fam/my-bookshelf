@@ -1,9 +1,12 @@
 "use client";
 
 import { create } from "zustand";
-import type { Book, BookshelfData } from "./types";
+import type { Book, BookshelfData, DisplayStyle, ShelfKey } from "./types";
+import { applySortPreset } from "./sort-presets";
 
 interface BookshelfStore extends BookshelfData {
+  primaryKey: ShelfKey;
+  hideDividers: boolean;
   nextId: number;
   /**
    * このセッションで追加された本のID（NEWバッジ表示用）。
@@ -15,6 +18,11 @@ interface BookshelfStore extends BookshelfData {
   updateBook: (id: number, updates: Partial<Omit<Book, "id">>) => void;
   setName: (name: string) => void;
   reorderBooks: (fromIndex: number, toIndex: number) => void;
+  /** 並べ替えプリセット。並べ替えたキーが仕切りの主キー（大きい仕切り）になる */
+  sortBooks: (key: ShelfKey) => void;
+  setHideDividers: (hide: boolean) => void;
+  /** 全冊の並べ方（背表紙・面出し）をまとめて変える */
+  setAllDisplay: (display: DisplayStyle) => void;
   removeAuthorDivider: (author: string) => void;
   loadFromData: (data: BookshelfData) => void;
 }
@@ -23,19 +31,23 @@ export const useBookshelfStore = create<BookshelfStore>((set) => ({
   name: "私の本棚",
   books: [],
   hiddenAuthors: [],
+  primaryKey: "category",
+  hideDividers: false,
   nextId: 1,
   newBookIds: [],
 
-  // 同じカテゴリの本が既にあれば、その最後尾の直後に挿入する
+  // 主キー（カテゴリ or 作者）が同じ本が既にあれば、その最後尾の直後に挿入する
   addBook: (book) =>
     set((state) => {
       const newBook = { ...book, id: state.nextId };
-      const category = book.category ?? null;
+      const keyOf = (b: Omit<Book, "id">) =>
+        (state.primaryKey === "author" ? b.author : b.category) ?? null;
+      const key = keyOf(book);
       const books = [...state.books];
 
       let insertAt = books.length;
       for (let i = books.length - 1; i >= 0; i--) {
-        if ((books[i].category ?? null) === category) {
+        if (keyOf(books[i]) === key) {
           insertAt = i + 1;
           break;
         }
@@ -70,6 +82,14 @@ export const useBookshelfStore = create<BookshelfStore>((set) => ({
       return { books };
     }),
 
+  sortBooks: (key) =>
+    set((state) => ({ books: applySortPreset(state.books, key), primaryKey: key })),
+
+  setHideDividers: (hide) => set({ hideDividers: hide }),
+
+  setAllDisplay: (display) =>
+    set((state) => ({ books: state.books.map((b) => ({ ...b, display })) })),
+
   removeAuthorDivider: (author) =>
     set((state) => ({
       hiddenAuthors: (state.hiddenAuthors ?? []).includes(author)
@@ -82,6 +102,8 @@ export const useBookshelfStore = create<BookshelfStore>((set) => ({
       name: data.name,
       books: data.books,
       hiddenAuthors: data.hiddenAuthors ?? [],
+      primaryKey: data.primaryKey ?? "category",
+      hideDividers: data.hideDividers ?? false,
       // URLから開いた本棚ではNEWバッジを表示しない
       newBookIds: [],
       nextId:

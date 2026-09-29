@@ -28,6 +28,10 @@ interface CompactData {
   n: string;
   b: CompactBook[];
   h?: string[];
+  /** 仕切りの主キーが作者のとき "a"（カテゴリ＝既定値のときは省略） */
+  k?: "a";
+  /** 仕切りをすべて隠すとき 1（表示＝既定値のときは省略） */
+  x?: 1;
 }
 
 function toCompactBook(book: Book): CompactBook {
@@ -85,6 +89,8 @@ function toCompact(data: BookshelfData): CompactData {
   if (data.hiddenAuthors && data.hiddenAuthors.length > 0) {
     compact.h = data.hiddenAuthors;
   }
+  if (data.primaryKey === "author") compact.k = "a";
+  if (data.hideDividers) compact.x = 1;
   return compact;
 }
 
@@ -95,6 +101,8 @@ function fromCompact(c: CompactData): BookshelfData | null {
     // ids are not stored; reassign them sequentially on load
     books: c.b.map((b, i) => fromCompactBook(b, i + 1)),
     hiddenAuthors: c.h ?? [],
+    primaryKey: c.k === "a" ? "author" : "category",
+    hideDividers: c.x === 1,
   };
 }
 

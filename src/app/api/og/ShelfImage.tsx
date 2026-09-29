@@ -1,13 +1,11 @@
 import type { Book } from "@/features/bookshelf/types";
 import {
-  AUTHOR_DIVIDER_HEIGHT,
-  AUTHOR_DIVIDER_WIDTH,
   BOOK_GAP,
   buildChunks,
-  CATEGORY_DIVIDER_HEIGHT,
-  CATEGORY_DIVIDER_WIDTH,
   type Decoration,
   type DividerItem,
+  type DividerOptions,
+  getDividerSize,
   FACE_OUT_HEIGHT,
   FRAME_BORDER,
   FRAME_WIDTH,
@@ -441,8 +439,8 @@ function BookView({ book, cover }: { book: Book; cover: string | null }) {
 
 function Divider({ divider }: { divider: DividerItem }) {
   const isCategory = divider.kind === "category";
-  const width = isCategory ? CATEGORY_DIVIDER_WIDTH : AUTHOR_DIVIDER_WIDTH;
-  const height = isCategory ? CATEGORY_DIVIDER_HEIGHT : AUTHOR_DIVIDER_HEIGHT;
+  const isPrimary = divider.level === "primary";
+  const { width, height } = getDividerSize(divider);
   return (
     <div
       style={{
@@ -470,7 +468,7 @@ function Divider({ divider }: { divider: DividerItem }) {
       />
       <VerticalText
         text={divider.label}
-        fontSize={px(isCategory ? 12 : 11)}
+        fontSize={px(isPrimary ? 12 : 11)}
         color={C.dividerFg}
         maxHeight={px(height - 40)}
         maxColumns={1}
@@ -506,14 +504,14 @@ function EmptyShelf() {
 
 function Shelf({
   books,
-  hiddenAuthors,
+  dividerOptions,
   covers,
 }: {
   books: Book[];
-  hiddenAuthors: string[];
+  dividerOptions: DividerOptions;
   covers: Map<number, string | null>;
 }) {
-  const rows = visibleRows(books, hiddenAuthors);
+  const rows = visibleRows(books, dividerOptions);
   return (
     <div
       style={{
@@ -641,13 +639,13 @@ function Header({ name, books }: { name: string; books: Book[] }) {
 export function ShelfImage({
   name,
   books,
-  hiddenAuthors,
+  dividerOptions,
   covers,
   fontFamily,
 }: {
   name: string;
   books: Book[];
-  hiddenAuthors: string[];
+  dividerOptions: DividerOptions;
   covers: Map<number, string | null>;
   fontFamily?: string;
 }) {
@@ -665,25 +663,29 @@ export function ShelfImage({
     >
       <Header name={name} books={books} />
       <div style={{ display: "flex", justifyContent: "center", paddingTop: 32 }}>
-        <Shelf books={books} hiddenAuthors={hiddenAuthors} covers={covers} />
+        <Shelf books={books} dividerOptions={dividerOptions} covers={covers} />
       </div>
     </div>
   );
 }
 
 /** 画像に写る段（1段目と、途中まで見える2段目）。それより下は描かない（描画が重くなるだけ） */
-function visibleRows(books: Book[], hiddenAuthors: string[]) {
-  return packIntoRows(buildChunks(books, hiddenAuthors)).slice(0, 2);
+function visibleRows(books: Book[], dividerOptions: DividerOptions) {
+  return packIntoRows(buildChunks(books, dividerOptions)).slice(0, 2);
 }
 
 /** 画像に写る本（表紙を取得する対象） */
-export function visibleBooks(books: Book[], hiddenAuthors: string[]): Book[] {
-  return visibleRows(books, hiddenAuthors).flatMap((row) => row.map((c) => c.book));
+export function visibleBooks(books: Book[], dividerOptions: DividerOptions): Book[] {
+  return visibleRows(books, dividerOptions).flatMap((row) => row.map((c) => c.book));
 }
 
 /** 画像に描く文字（フォントのサブセット取得用） */
-export function textInImage(name: string, books: Book[], hiddenAuthors: string[]): string {
-  const labels = visibleRows(books, hiddenAuthors)
+export function textInImage(
+  name: string,
+  books: Book[],
+  dividerOptions: DividerOptions
+): string {
+  const labels = visibleRows(books, dividerOptions)
     .flatMap((row) => row.flatMap((c) => [...c.dividers.map((d) => d.label), c.book.name]));
   return [name, "冊読了", "まだ本が登録されていません", ...labels].join("") + "0123456789 ";
 }
