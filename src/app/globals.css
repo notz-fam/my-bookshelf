@@ -6,6 +6,7 @@
 /*
  * デザインテーマ: ObsidianUI（モノクロ基調の dark / light）
  * shadcn トークン + 本棚専用トークン（棚・仕切り・背表紙）
+ * ライトテーマの値は OGP画像（src/app/api/og/theme.ts）でも使っているので、変更したら合わせる
  */
 :root {
   --radius: 0.625rem;

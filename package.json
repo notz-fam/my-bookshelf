@@ -11,7 +11,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "seed": "node scripts/seed-url.mjs"
+    "seed": "node scripts/seed-url.mjs",
+    "ogp": "node scripts/check-ogp.mjs"
   },
   "keywords": [],
   "author": "",

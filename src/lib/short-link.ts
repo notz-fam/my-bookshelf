@@ -7,6 +7,8 @@ import { Redis } from "@upstash/redis";
 
 const KEY_PREFIX = "s:";
 const ID_LENGTHS = [8, 12, 16];
+/** 短縮IDの形式（ID_LENGTHS のいずれかの長さの base64url） */
+export const SHORT_ID_PATTERN = /^[A-Za-z0-9_-]{8,16}$/;
 /** 保存を受け付ける ?d= の最大長（異常に大きなデータで Redis を埋められないように） */
 export const MAX_DATA_LENGTH = 20000;
 

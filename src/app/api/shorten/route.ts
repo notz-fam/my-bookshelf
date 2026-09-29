@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { decodeBookshelfData } from "@/lib/url";
 import {
   createShortId,
@@ -26,6 +26,9 @@ export async function POST(request: NextRequest) {
 
   try {
     const id = await createShortId(d);
+    // OGP画像の生成には数秒かかるので、URLが貼られる前に生成して CDN にキャッシュさせておく
+    // （クローラーは画像の取得に時間がかかると諦める）
+    after(() => fetch(`${request.nextUrl.origin}/api/og?s=${id}`).catch(() => {}));
     return NextResponse.json({ shortUrl: `${request.nextUrl.origin}/s/${id}` });
   } catch (e) {
     if (e instanceof ShortLinkUnavailableError) {

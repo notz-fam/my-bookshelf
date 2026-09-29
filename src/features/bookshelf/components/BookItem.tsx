@@ -4,6 +4,15 @@ import Image from "next/image";
 import { AnimatePresence, motion } from "motion/react";
 import { BookCheck, BookDashed, BookOpen, PanelTop, Pencil, X } from "lucide-react";
 import type { Book, DisplayStyle } from "../types";
+import {
+  type Decoration,
+  FACE_OUT_HEIGHT,
+  getBookDisplay,
+  getBookWidth,
+  getDecoration,
+  getSpineColorIndex,
+  getSpineHeight,
+} from "../shelf-layout";
 import { Button } from "@/shared/ui/button";
 import {
   Tooltip,
@@ -11,53 +20,17 @@ import {
   TooltipTrigger,
 } from "@/shared/ui/tooltip";
 
-// 背表紙の色は globals.css の --spine-1..N（light/dark で別パレット）
-const SPINE_COLOR_COUNT = 12;
-
-const SPINE_WIDTHS = [34, 40, 46, 52];
-const SPINE_HEIGHTS = [152, 165, 178, 191, 204];
-export const FACE_OUT_WIDTH = 112;
-const FACE_OUT_HEIGHT = 158;
-
 const HOVER_SPRING = { type: "spring", stiffness: 420, damping: 24 } as const;
 
-// 本のIDから決定的に見た目（色・サイズ・装飾）を決めるためのハッシュ
-function hash(id: number, salt: number): number {
-  let h = Math.imul(id + 1, 2654435761) + Math.imul(salt + 1, 40503);
-  h ^= h >>> 13;
-  h = Math.imul(h, 1597334677);
-  h ^= h >>> 16;
-  return h >>> 0;
-}
-
-export function getBookDisplay(book: Book): DisplayStyle {
-  return book.display ?? "normal";
-}
-
-export function getBookWidth(book: Book): number {
-  if (getBookDisplay(book) === "face-out") return FACE_OUT_WIDTH;
-  return SPINE_WIDTHS[hash(book.id, 1) % SPINE_WIDTHS.length];
-}
-
-function getSpineHeight(book: Book): number {
-  return SPINE_HEIGHTS[hash(book.id, 2) % SPINE_HEIGHTS.length];
-}
-
+// 背表紙の色は globals.css の --spine-1..N（light/dark で別パレット）
 function getSpineColors(book: Book) {
-  const n = (hash(book.id, 3) % SPINE_COLOR_COUNT) + 1;
+  const n = getSpineColorIndex(book);
   const fg = `var(--spine-${n}-fg)`;
   return {
     bg: `var(--spine-${n})`,
     fg,
     accent: `color-mix(in oklch, ${fg} 40%, transparent)`,
   };
-}
-
-type Decoration = "bands" | "label" | "dots" | "lines" | "plain";
-const DECORATIONS: Decoration[] = ["bands", "label", "dots", "lines", "plain"];
-
-function getDecoration(book: Book): Decoration {
-  return DECORATIONS[hash(book.id, 4) % DECORATIONS.length];
 }
 
 function SpineDecoration({

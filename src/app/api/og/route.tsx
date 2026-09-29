@@ -1,27 +1,16 @@
 import { ImageResponse } from "next/og";
 import type { NextRequest } from "next/server";
 import { decodeBookshelfData } from "@/lib/url";
-import type { Book } from "@/features/bookshelf/types";
+import { resolveShortId, SHORT_ID_PATTERN } from "@/lib/short-link";
+import { OG_HEIGHT, OG_WIDTH, ShelfImage, textInImage, visibleBooks } from "./ShelfImage";
 
-// 共有URL（?d=）から本棚のOGP画像を生成する。
-// SNS / Slack に共有URLを貼ったときのサムネイル用。
+// 本棚のOGP画像を生成する。SNS / Slack に共有URLを貼ったときのサムネイル用。
+//   ?s={短縮ID} … 通常はこちら（クローラーは長い画像URLを取得しないため）
+//   ?d={本棚データ} … 短縮URLが使えないときのフォールバック
+// 見た目は画面の本棚（ライトテーマ）に合わせている（ShelfImage.tsx）。本は全冊面出しで描く。
 
-const WIDTH = 1200;
-const HEIGHT = 630;
-const MAX_BOOKS = 7;
-const COVER_W = 118;
-const COVER_H = 172;
-const FETCH_TIMEOUT_MS = 3000;
-
-// 表紙が無い本の色（globals.css の --spine-* に近いトーン）
-const SPINE_COLORS = [
-  { bg: "#7c3a2d", fg: "#f6e7d8" },
-  { bg: "#2f4a3a", fg: "#e7efe4" },
-  { bg: "#27415e", fg: "#e3ebf5" },
-  { bg: "#8a6a2f", fg: "#fbf1dc" },
-  { bg: "#4b3b5c", fg: "#ece4f3" },
-  { bg: "#5a5a52", fg: "#f1f0ea" },
-];
+// クローラーは数秒で画像取得を諦めるので、表紙やフォントが遅ければ待たずに描く
+const FETCH_TIMEOUT_MS = 1500;
 
 async function fetchWithTimeout(url: string): Promise<Response | null> {
   try {
@@ -44,10 +33,11 @@ async function loadCover(url: string | undefined): Promise<string | null> {
   return `data:${type};base64,${buf.toString("base64")}`;
 }
 
-// 描画する文字だけを含む Noto Sans JP のサブセットを取得
-async function loadFont(text: string): Promise<ArrayBuffer | null> {
+// 描画する文字だけを含むサブセットを Google Fonts から取得（画面と同じ Inter Tight + Noto Sans JP）
+async function loadFont(family: string, weight: number, text: string): Promise<ArrayBuffer | null> {
+  if (!text) return null;
   const cssRes = await fetchWithTimeout(
-    `https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@700&text=${encodeURIComponent(text)}`
+    `https://fonts.googleapis.com/css2?family=${family.replace(/ /g, "+")}:wght@${weight}&text=${encodeURIComponent(text)}`
   );
   if (!cssRes?.ok) return null;
   const match = (await cssRes.text()).match(/src: url\((.+?)\) format\('(opentype|truetype)'\)/);
@@ -57,151 +47,60 @@ async function loadFont(text: string): Promise<ArrayBuffer | null> {
   return fontRes.arrayBuffer();
 }
 
-function BookCard({ book, cover, index }: { book: Book; cover: string | null; index: number }) {
-  if (cover) {
-    return (
-      // next/image は satori では使えない
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={cover}
-        alt={book.name}
-        width={COVER_W}
-        height={COVER_H}
-        style={{
-          objectFit: "cover",
-          borderRadius: 4,
-          boxShadow: "0 10px 20px rgba(0,0,0,0.35)",
-          opacity: book.finish ? 1 : 0.75,
-        }}
-      />
-    );
+// 読めないときはデフォルト画像にする（画像が出ないよりはよい）
+async function resolveData(params: URLSearchParams): Promise<string | null> {
+  const s = params.get("s");
+  if (s && SHORT_ID_PATTERN.test(s)) {
+    try {
+      return await resolveShortId(s);
+    } catch {
+      return null;
+    }
   }
-  const color = SPINE_COLORS[index % SPINE_COLORS.length];
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        width: COVER_W,
-        height: COVER_H,
-        padding: 12,
-        borderRadius: 4,
-        background: color.bg,
-        color: color.fg,
-        fontSize: 18,
-        lineHeight: 1.3,
-        textAlign: "center",
-        boxShadow: "0 10px 20px rgba(0,0,0,0.35)",
-        opacity: book.finish ? 1 : 0.75,
-        overflow: "hidden",
-      }}
-    >
-      {book.name.length > 28 ? `${book.name.slice(0, 27)}…` : book.name}
-    </div>
-  );
+  return params.get("d");
 }
 
 export async function GET(request: NextRequest) {
-  const d = request.nextUrl.searchParams.get("d");
+  const d = await resolveData(request.nextUrl.searchParams);
   const data = d ? decodeBookshelfData(d) : null;
 
   const name = data?.name ?? "私の本棚";
-  const books = data?.books ?? [];
-  const shown = books.slice(0, MAX_BOOKS);
-  const rest = books.length - shown.length;
-  const finished = books.filter((b) => b.finish).length;
+  // 画像では表紙が見えるように、全冊を面出しで並べる（画面での並べ方の設定は使わない）
+  const books = (data?.books ?? []).map((b) => ({ ...b, display: "face-out" as const }));
+  const hiddenAuthors = data?.hiddenAuthors ?? [];
 
-  const subtitle =
-    books.length === 0
-      ? "読んだ本を本棚に並べて共有しよう"
-      : `${books.length}冊` + (finished < books.length ? ` · 読了 ${finished}冊` : "");
+  const text = textInImage(name, books, hiddenAuthors);
+  const latin = Array.from(new Set(text.replace(/[^\x20-\x7e]/g, ""))).join("");
+  const shown = visibleBooks(books, hiddenAuthors);
 
-  const covers = await Promise.all(shown.map((b) => loadCover(b.coverUrl)));
+  const [inter, noto, coverList] = await Promise.all([
+    loadFont("Inter Tight", 600, latin),
+    loadFont("Noto Sans JP", 600, text),
+    Promise.all(shown.map((b) => loadCover(b.coverUrl))),
+  ]);
+  const covers = new Map(shown.map((b, i) => [b.id, coverList[i]]));
 
-  const text =
-    ["私の本棚", name, subtitle, `ほか${rest}冊`, "…", ...shown.map((b) => b.name)].join("") +
-    "0123456789";
-  const font = await loadFont(text);
+  const fonts = [
+    inter && { name: "Inter Tight", data: inter, weight: 600 as const, style: "normal" as const },
+    noto && { name: "Noto Sans JP", data: noto, weight: 600 as const, style: "normal" as const },
+  ].filter((f) => !!f);
 
   return new ImageResponse(
     (
-      <div
-        style={{
-          width: "100%",
-          height: "100%",
-          display: "flex",
-          flexDirection: "column",
-          background: "linear-gradient(160deg, #f7f1e6 0%, #efe4d0 100%)",
-          fontFamily: font ? "Noto Sans JP" : undefined,
-          color: "#3b2a1a",
-        }}
-      >
-        {/* 見出し */}
-        <div style={{ display: "flex", flexDirection: "column", padding: "48px 64px 0" }}>
-          <div style={{ display: "flex", fontSize: 26, color: "#8a6a4a" }}>私の本棚</div>
-          <div
-            style={{
-              display: "flex",
-              fontSize: 60,
-              marginTop: 4,
-              maxWidth: WIDTH - 128,
-              overflow: "hidden",
-              whiteSpace: "nowrap",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {name}
-          </div>
-          <div style={{ display: "flex", fontSize: 28, marginTop: 8, color: "#6b5238" }}>
-            {subtitle}
-          </div>
-        </div>
-
-        {/* 棚 */}
-        <div style={{ display: "flex", flexDirection: "column", marginTop: "auto", padding: "0 48px" }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "flex-end",
-              gap: 14,
-              height: 220,
-              padding: "0 24px",
-              background: "#5b3d24",
-              borderRadius: "12px 12px 0 0",
-              boxShadow: "inset 0 12px 24px rgba(0,0,0,0.45)",
-            }}
-          >
-            {shown.map((book, i) => (
-              <BookCard key={i} book={book} cover={covers[i]} index={i} />
-            ))}
-            {rest > 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  height: COVER_H,
-                  marginLeft: 8,
-                  fontSize: 26,
-                  color: "#f3e3cc",
-                }}
-              >
-                {`ほか${rest}冊`}
-              </div>
-            )}
-          </div>
-          {/* 棚板 */}
-          <div style={{ display: "flex", height: 28, background: "#8b5e3c", boxShadow: "0 6px 12px rgba(0,0,0,0.3)" }} />
-        </div>
-        <div style={{ display: "flex", height: 40 }} />
-      </div>
+      <ShelfImage
+        name={name}
+        books={books}
+        hiddenAuthors={hiddenAuthors}
+        covers={covers}
+        fontFamily={fonts.length ? fonts.map((f) => `"${f.name}"`).join(", ") : undefined}
+      />
     ),
     {
-      width: WIDTH,
-      height: HEIGHT,
-      fonts: font ? [{ name: "Noto Sans JP", data: font, weight: 700, style: "normal" }] : undefined,
+      width: OG_WIDTH,
+      height: OG_HEIGHT,
+      fonts: fonts.length ? fonts : undefined,
       headers: {
-        // 画像の内容は d パラメータだけで決まる
+        // 画像の内容はデータだけで決まる（?s= もデータのハッシュ）
         "Cache-Control": "public, max-age=86400, s-maxage=31536000, immutable",
       },
     }

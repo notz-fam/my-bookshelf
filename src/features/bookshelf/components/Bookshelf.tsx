@@ -5,7 +5,23 @@ import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { BookOpen, X } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import type { Book, DisplayStyle } from "../types";
-import BookItem, { getBookWidth } from "./BookItem";
+import BookItem from "./BookItem";
+import {
+  AUTHOR_DIVIDER_HEIGHT,
+  AUTHOR_DIVIDER_WIDTH,
+  BOOK_GAP,
+  buildChunks,
+  CATEGORY_DIVIDER_HEIGHT,
+  CATEGORY_DIVIDER_WIDTH,
+  type DividerItem,
+  FRAME_BORDER,
+  FRAME_WIDTH,
+  packIntoRows,
+  SHELF_HEIGHT,
+  SHELF_INNER_WIDTH,
+  SHELF_PADDING_X,
+  type ShelfChunk,
+} from "../shelf-layout";
 
 interface BookshelfProps {
   books: Book[];
@@ -19,85 +35,6 @@ interface BookshelfProps {
   onEditBook?: (book: Book) => void;
   onReorderBooks?: (fromIndex: number, toIndex: number) => void;
   onRemoveAuthorDivider?: (author: string) => void;
-}
-
-// 本棚は固定幅。棚の内寸に収まるだけ本を並べ、あふれたら次の段へ
-const SHELF_INNER_WIDTH = 880;
-const BOOK_GAP = 6;
-const SHELF_HEIGHT = 226;
-const FRAME_BORDER = 16;
-const SHELF_PADDING_X = 12;
-const FRAME_WIDTH = SHELF_INNER_WIDTH + SHELF_PADDING_X * 2 + FRAME_BORDER * 2;
-const MIN_ROWS = 3;
-
-const CATEGORY_DIVIDER_WIDTH = 34;
-const AUTHOR_DIVIDER_WIDTH = 28;
-
-interface DividerItem {
-  kind: "category" | "author";
-  label: string;
-}
-
-// 本1冊＋その直前に立てる仕切り。折り返し時に泣き別れしないよう1チャンクで扱う
-interface ShelfChunk {
-  dividers: DividerItem[];
-  book: Book;
-  index: number;
-}
-
-// 並び順の中でカテゴリ・作者が切り替わる位置に仕切りを立てる
-function buildChunks(books: Book[], hiddenAuthors: string[]): ShelfChunk[] {
-  return books.map((book, index) => {
-    const prev = index > 0 ? books[index - 1] : null;
-    const category = book.category ?? null;
-    const author = book.author ?? null;
-    const categoryChanged = !prev || (prev.category ?? null) !== category;
-    const authorChanged =
-      !prev || categoryChanged || (prev.author ?? null) !== author;
-
-    const dividers: DividerItem[] = [];
-    if (category && categoryChanged) {
-      dividers.push({ kind: "category", label: category });
-    }
-    if (author && authorChanged && !hiddenAuthors.includes(author)) {
-      dividers.push({ kind: "author", label: author });
-    }
-    return { dividers, book, index };
-  });
-}
-
-function chunkWidth(chunk: ShelfChunk): number {
-  const dividersWidth = chunk.dividers.reduce(
-    (sum, d) =>
-      sum +
-      (d.kind === "category" ? CATEGORY_DIVIDER_WIDTH : AUTHOR_DIVIDER_WIDTH) +
-      BOOK_GAP,
-    0
-  );
-  return dividersWidth + getBookWidth(chunk.book);
-}
-
-function packIntoRows(chunks: ShelfChunk[]): ShelfChunk[][] {
-  const rows: ShelfChunk[][] = [];
-  let row: ShelfChunk[] = [];
-  let rowWidth = 0;
-
-  for (const chunk of chunks) {
-    const width = chunkWidth(chunk);
-    const needed = row.length === 0 ? width : rowWidth + BOOK_GAP + width;
-    if (row.length > 0 && needed > SHELF_INNER_WIDTH) {
-      rows.push(row);
-      row = [];
-      rowWidth = width;
-    } else {
-      rowWidth = needed;
-    }
-    row.push(chunk);
-  }
-  if (row.length > 0) rows.push(row);
-
-  while (rows.length < MIN_ROWS) rows.push([]);
-  return rows;
 }
 
 function ShelfPlank() {
@@ -125,7 +62,7 @@ function ShelfDivider({
 }: ShelfDividerProps) {
   const isCategory = divider.kind === "category";
   const width = isCategory ? CATEGORY_DIVIDER_WIDTH : AUTHOR_DIVIDER_WIDTH;
-  const height = isCategory ? 214 : 178;
+  const height = isCategory ? CATEGORY_DIVIDER_HEIGHT : AUTHOR_DIVIDER_HEIGHT;
 
   return (
     <div
@@ -184,13 +121,19 @@ function ShelfDivider({
   );
 }
 
-// 本（＋直前の仕切り）1チャンクの出入りアニメーション。
-// custom には「現在棚にある本のID集合」が渡る。段をまたいだ移動では
+// 本・仕切りの出入りアニメーション。
+// custom には「現在棚にある本のID・仕切りキーの集合」が渡る。段をまたいだ移動では
 // 旧インスタンスを即座に消し、layoutId による共有レイアウト遷移に任せる。
-function chunkVariants(bookId: number) {
+// 仕切りは本とは別要素にして、本を入れ替えても仕切りは自分の位置に留まるようにする。
+interface PresenceIds {
+  books: Set<number>;
+  dividers: Set<string>;
+}
+
+function itemVariants(isPresent: (ids: PresenceIds) => boolean) {
   return {
-    exit: (currentIds: Set<number>) =>
-      currentIds.has(bookId)
+    exit: (ids: PresenceIds) =>
+      isPresent(ids)
         ? { opacity: 0, transition: { duration: 0 } }
         : {
             opacity: 0,
@@ -228,7 +171,12 @@ export default function Bookshelf({
   }
 
   const rows = packIntoRows(buildChunks(books, hiddenAuthors ?? []));
-  const currentIds = new Set(books.map((b) => b.id));
+  const currentIds: PresenceIds = {
+    books: new Set(books.map((b) => b.id)),
+    dividers: new Set(
+      rows.flatMap((row) => row.flatMap((c) => c.dividers.map((d) => d.key)))
+    ),
+  };
   const freshOrder = books.filter((b) => !knownIds.has(b.id)).map((b) => b.id);
 
   const handleDrop = (targetIndex: number) => {
@@ -298,16 +246,38 @@ export default function Bookshelf({
                   {...rowDropProps(row)}
                 >
                   <AnimatePresence mode="popLayout" custom={currentIds}>
-                    {row.map(({ dividers, book, index }) => {
+                    {row.flatMap(({ dividers, book, index }) => {
                       const freshPos = freshOrder.indexOf(book.id);
-                      return (
+                      const dividerNodes = dividers.map((divider) => (
+                        <motion.div
+                          key={divider.key}
+                          layoutId={`divider-${divider.key}`}
+                          layout="position"
+                          className="relative flex items-end flex-shrink-0 hover:z-20"
+                          variants={itemVariants((ids) => ids.dividers.has(divider.key))}
+                          custom={currentIds}
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit="exit"
+                          transition={{ ...LAYOUT_SPRING, layout: LAYOUT_SPRING }}
+                        >
+                          <ShelfDivider
+                            divider={divider}
+                            beforeIndex={index}
+                            isOwner={isOwner}
+                            onDropAt={handleDrop}
+                            onRemove={onRemoveAuthorDivider}
+                          />
+                        </motion.div>
+                      ));
+                      return [
+                        ...dividerNodes,
                         <motion.div
                           key={book.id}
                           layoutId={`book-${book.id}`}
                           layout="position"
                           className="relative flex items-end flex-shrink-0 hover:z-20"
-                          style={{ gap: `${BOOK_GAP}px` }}
-                          variants={chunkVariants(book.id)}
+                          variants={itemVariants((ids) => ids.books.has(book.id))}
                           custom={currentIds}
                           initial={
                             freshPos >= 0
@@ -322,16 +292,6 @@ export default function Bookshelf({
                             layout: LAYOUT_SPRING,
                           }}
                         >
-                          {dividers.map((divider) => (
-                            <ShelfDivider
-                              key={`${divider.kind}-${divider.label}`}
-                              divider={divider}
-                              beforeIndex={index}
-                              isOwner={isOwner}
-                              onDropAt={handleDrop}
-                              onRemove={onRemoveAuthorDivider}
-                            />
-                          ))}
                           <BookItem
                             book={book}
                             index={index}
@@ -352,8 +312,8 @@ export default function Bookshelf({
                               dragIndex !== index
                             }
                           />
-                        </motion.div>
-                      );
+                        </motion.div>,
+                      ];
                     })}
                   </AnimatePresence>
                   {books.length === 0 && rowIndex === 0 && (

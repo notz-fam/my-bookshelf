@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resolveShortId } from "@/lib/short-link";
+import { resolveShortId, SHORT_ID_PATTERN } from "@/lib/short-link";
 
 // 短縮URL /s/{id} → /bookshelf?d=... へ直接リダイレクトする（中継ページなし）。
 // Slack などのクローラーもリダイレクト先の OGP を読む。
-
-const ID_PATTERN = /^[A-Za-z0-9_-]{8,16}$/;
 
 function notFound() {
   return new NextResponse("この短縮URLは見つかりませんでした。", {
@@ -18,7 +16,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  if (!ID_PATTERN.test(id)) return notFound();
+  if (!SHORT_ID_PATTERN.test(id)) return notFound();
 
   let d: string | null;
   try {
